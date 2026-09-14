@@ -18,7 +18,11 @@ import {
   ArrowDownRight,
   RefreshCw,
   SlidersHorizontal,
-  Landmark
+  Landmark,
+  FileText,
+  UploadCloud,
+  ArrowLeftRight,
+  PieChart
 } from 'lucide-react';
 import { fetchWithAuth, setToken, getToken, removeToken } from '@/lib/api';
 
@@ -51,6 +55,39 @@ interface Transaction {
   account_name?: string;
 }
 
+interface PortfolioPosition {
+  asset_id: number;
+  ticker: string;
+  name: string;
+  asset_type: string;
+  quantity: number;
+  average_price: number;
+  total_invested: number;
+  total_dividends: number;
+}
+
+interface InvestmentSummary {
+  total_equity_invested: number;
+  monthly_capital_gain: number;
+  total_dividends_received: number;
+  positions_count: number;
+}
+
+interface InvestmentTransaction {
+  id: number;
+  ticker: string;
+  asset_name: string;
+  asset_type: string;
+  operation_type: string;
+  quantity: number;
+  unit_price: number;
+  costs: number;
+  total_amount: number;
+  trade_date: string;
+  source: string;
+  notes?: string;
+}
+
 interface DashboardSummary {
   total_income: number;
   total_expense: number;
@@ -62,7 +99,7 @@ interface DashboardSummary {
 export default function Home() {
   const [token, setTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'accounts' | 'categories'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'investments' | 'accounts' | 'categories'>('overview');
 
   // Auth State
   const [isRegister, setIsRegister] = useState(false);
@@ -77,6 +114,31 @@ export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+
+  // Investment State
+  const [portfolio, setPortfolio] = useState<PortfolioPosition[]>([]);
+  const [invTransactions, setInvTransactions] = useState<InvestmentTransaction[]>([]);
+  const [invSummary, setInvSummary] = useState<InvestmentSummary | null>(null);
+
+  // Modais de Investimento
+  const [showSinacorModal, setShowSinacorModal] = useState(false);
+  const [showMigrateModal, setShowMigrateModal] = useState(false);
+  const [showManualInvModal, setShowManualInvModal] = useState(false);
+  const [invUploadMsg, setInvUploadMsg] = useState("");
+  const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+
+  // Form Operação Manual Investimento
+  const [invTicker, setInvTicker] = useState("");
+  const [invOpType, setInvOpType] = useState("buy");
+  const [invQty, setInvQty] = useState("");
+  const [invUnitPrice, setInvUnitPrice] = useState("");
+  const [invCosts, setInvCosts] = useState("");
+  const [invDate, setInvDate] = useState(new Date().toISOString().split("T")[0]);
+
+  // Form Migração de Ticker
+  const [migrateOld, setMigrateOld] = useState("");
+  const [migrateNew, setMigrateNew] = useState("");
+  const [migrateMsg, setMigrateMsg] = useState("");
 
   // Forms
   const [newAccName, setNewAccName] = useState('');
@@ -97,6 +159,8 @@ export default function Home() {
   // Pluggy Connect State
   const [isConnectingPluggy, setIsConnectingPluggy] = useState(false);
   const [pluggyStatusMsg, setPluggyStatusMsg] = useState('');
+  const [customItemId, setCustomItemId] = useState('');
+  const [showItemInput, setShowItemInput] = useState(false);
 
   useEffect(() => {
     const savedToken = getToken();
@@ -110,13 +174,20 @@ export default function Home() {
 
   async function loadAllData() {
     try {
-      const [meRes, accRes, catRes, txRes, sumRes] = await Promise.all([
+      const [meRes, accRes, catRes, txRes, sumRes, portRes, invTxRes, invSumRes] = await Promise.all([
         fetchWithAuth('/auth/me'),
         fetchWithAuth('/accounts/'),
         fetchWithAuth('/categories/'),
         fetchWithAuth('/transactions/'),
-        fetchWithAuth('/transactions/summary?days=90')
+        fetchWithAuth('/transactions/summary?days=90'),
+        fetchWithAuth('/investments/portfolio'),
+        fetchWithAuth('/investments/transactions'),
+        fetchWithAuth('/investments/summary')
       ]);
+
+      if (portRes.ok) setPortfolio(await portRes.json());
+      if (invTxRes.ok) setInvTransactions(await invTxRes.json());
+      if (invSumRes.ok) setInvSummary(await invSumRes.json());
 
       if (meRes.ok) setUser(await meRes.json());
       if (accRes.ok) {
@@ -173,6 +244,98 @@ export default function Home() {
     setAccounts([]);
     setCategories([]);
     setTransactions([]);
+  }
+
+  // Funções de Investimentos
+  async function handleCreateManualInvestment(e: React.FormEvent) {
+    e.preventDefault();
+    if (!invTicker) return;
+
+    const q = parseFloat(invQty) || 0;
+    const p = parseFloat(invUnitPrice) || 0;
+    const c = parseFloat(invCosts) || 0;
+    const total = (q * p) + (invOpType === "buy" ? c : -c);
+
+    try {
+      const res = await fetchWithAuth("/investments/transactions", {
+        method: "POST",
+        body: JSON.stringify({
+          ticker: invTicker.toUpperCase().trim(),
+          operation_type: invOpType,
+          quantity: q,
+          unit_price: p,
+          costs: c,
+          total_amount: total,
+          trade_date: new Date(invDate).toISOString()
+        })
+      });
+      if (res.ok) {
+        setShowManualInvModal(false);
+        setInvTicker("");
+        setInvQty("");
+        setInvUnitPrice("");
+        setInvCosts("");
+        loadAllData();
+      }
+    } catch (err: any) {
+      alert("Erro ao salvar operação: " + err.message);
+    }
+  }
+
+  async function handleUploadSinacor(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingPdf(true);
+    setInvUploadMsg("Processando nota de corretagem padrão Sinacor/B3...");
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api-financeira.leo.lyra.nom.br"}/api/v1/investments/upload-sinacor`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setInvUploadMsg(`Erro: ${data.detail || "Falha ao processar nota"}`);
+        return;
+      }
+      setInvUploadMsg(`Sucesso! Pregão de ${data.trade_date}: ${data.operations_imported} operações importadas com rateio de R$ ${data.total_costs} em taxas.`);
+      loadAllData();
+    } catch (err: any) {
+      setInvUploadMsg("Erro no envio: " + err.message);
+    } finally {
+      setIsUploadingPdf(false);
+    }
+  }
+
+  async function handleMigrateTicker(e: React.FormEvent) {
+    e.preventDefault();
+    if (!migrateOld || !migrateNew) return;
+    setMigrateMsg("Atualizando histórico de tickers...");
+    try {
+      const res = await fetchWithAuth("/investments/migrate-ticker", {
+        method: "POST",
+        body: JSON.stringify({
+          ticker_old: migrateOld.toUpperCase().trim(),
+          ticker_new: migrateNew.toUpperCase().trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMigrateMsg(`Erro: ${data.detail || "Falha na migração"}`);
+        return;
+      }
+      setMigrateMsg(`Sucesso! ${data.transactions_updated} lançamentos passados de ${data.ticker_old} foram atualizados para ${data.ticker_new}.`);
+      setMigrateOld("");
+      setMigrateNew("");
+      loadAllData();
+    } catch (err: any) {
+      setMigrateMsg("Erro: " + err.message);
+    }
   }
 
   // Ações de Transação
@@ -292,6 +455,33 @@ export default function Home() {
       }
     } catch (err) {
       console.error(err);
+    }
+  }
+
+  // Sincronizar por Item ID específico
+  async function handleSyncSingleItem(itemIdToSync?: string) {
+    const id = itemIdToSync || customItemId;
+    if (!id) return;
+    setIsConnectingPluggy(true);
+    setPluggyStatusMsg(`Conectando ao banco (Item: ${id.slice(0, 8)}...)...`);
+    try {
+      const res = await fetchWithAuth("/open-finance/sync-item", {
+        method: "POST",
+        body: JSON.stringify({ itemId: id.trim() })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPluggyStatusMsg(`Aviso da Pluggy: ${data.detail || "Erro ao sincronizar"}`);
+        return;
+      }
+      setPluggyStatusMsg(`Sincronização concluída! ${data.accounts_synced} conta(s) e ${data.transactions_synced} transações importadas.`);
+      setCustomItemId("");
+      setShowItemInput(false);
+      loadAllData();
+    } catch (err: any) {
+      setPluggyStatusMsg("Erro ao sincronizar: " + err.message);
+    } finally {
+      setIsConnectingPluggy(false);
     }
   }
 
@@ -475,11 +665,10 @@ export default function Home() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={handleSyncAllExisting}
-            disabled={isConnectingPluggy}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow transition disabled:opacity-50"
+            onClick={() => setShowItemInput(!showItemInput)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow transition"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingPluggy ? "animate-spin" : ""}`} /> Sincronizar Contas Já Conectadas
+            <RefreshCw className="w-3.5 h-3.5" /> Sincronizar por Item ID
           </button>
           <button
             onClick={handleStartPluggyConnect}
@@ -495,6 +684,34 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* Caixa de Entrada de Item ID da Pluggy */}
+      {showItemInput && (
+        <div className="mt-4 p-4 bg-slate-900 border border-indigo-500/30 rounded-xl shadow-lg">
+          <h3 className="text-xs font-semibold text-white mb-2 flex items-center gap-1.5">
+            <Landmark className="w-4 h-4 text-indigo-400" /> Sincronizar Banco Conectado (Pluggy)
+          </h3>
+          <p className="text-[11px] text-slate-400 mb-3">
+            Cole abaixo o <strong>Item ID</strong> da sua conexão no painel da Pluggy (ex: a conexão do Banco Inter).
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              placeholder="Cole o Item ID aqui (ex: e84d2b1a-8c34-4a21-...)"
+              value={customItemId}
+              onChange={(e) => setCustomItemId(e.target.value)}
+              className="flex-1 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500 font-mono"
+            />
+            <button
+              onClick={() => handleSyncSingleItem()}
+              disabled={isConnectingPluggy || !customItemId}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition disabled:opacity-50 whitespace-nowrap"
+            >
+              {isConnectingPluggy ? "Importando..." : "Importar Contas & Extratos"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Mensagens de status do Open Finance */}
       {pluggyStatusMsg && (
@@ -525,6 +742,16 @@ export default function Home() {
           }`}
         >
           <SlidersHorizontal className="w-4 h-4" /> Lançamentos / Extrato ({transactions.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('investments')}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition whitespace-nowrap ${
+            activeTab === 'investments'
+              ? 'bg-indigo-600 text-white'
+              : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4" /> Investimentos & Carteira ({portfolio.length})
         </button>
         <button
           onClick={() => setActiveTab('accounts')}
@@ -829,6 +1056,284 @@ export default function Home() {
                       </td>
                     </tr>
                   )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ABA INVESTIMENTOS & CARTEIRA */}
+      {activeTab === 'investments' && (
+        <section className="mt-6 space-y-6">
+          {/* Cards de Métricas de Investimento */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium uppercase tracking-wider">Patrimônio em Custódia</span>
+                <PieChart className="w-4 h-4 text-emerald-400" />
+              </div>
+              <div className="mt-3">
+                <span className="text-2xl font-bold text-white">
+                  R$ {Number(invSummary?.total_equity_invested || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">{invSummary?.positions_count || 0} ativos em carteira</p>
+              </div>
+            </div>
+
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium uppercase tracking-wider">Proventos Recebidos</span>
+                <ArrowUpRight className="w-4 h-4 text-indigo-400" />
+              </div>
+              <div className="mt-3">
+                <span className="text-2xl font-bold text-indigo-400">
+                  R$ {Number(invSummary?.total_dividends_received || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">Dividendos, JCP e Rendimentos</p>
+              </div>
+            </div>
+
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium uppercase tracking-wider">Ganho de Capital (Mês)</span>
+                <TrendingUp className="w-4 h-4 text-amber-400" />
+              </div>
+              <div className="mt-3">
+                <span className={`text-2xl font-bold ${Number(invSummary?.monthly_capital_gain || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                  R$ {Number(invSummary?.monthly_capital_gain || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">Resultado de vendas fechadas</p>
+              </div>
+            </div>
+
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium uppercase tracking-wider">Ações de Importação</span>
+                <UploadCloud className="w-4 h-4 text-blue-400" />
+              </div>
+              <div className="mt-2 flex flex-col gap-1.5">
+                <label className="cursor-pointer text-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition">
+                  {isUploadingPdf ? "Lendo Nota..." : "Importar Nota PDF (Sinacor)"}
+                  <input type="file" accept=".pdf" onChange={handleUploadSinacor} className="hidden" />
+                </label>
+                <button
+                  onClick={() => setShowMigrateModal(!showMigrateModal)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition"
+                >
+                  Migrar Ticker (De/Para)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Mensagem de Feedback de Upload */}
+          {invUploadMsg && (
+            <div className="p-3 bg-indigo-950/60 border border-indigo-800/50 rounded-xl text-xs text-indigo-200 flex justify-between items-center">
+              <span>{invUploadMsg}</span>
+              <button onClick={() => setInvUploadMsg("")} className="text-indigo-400 hover:underline text-[10px]">Fechar</button>
+            </div>
+          )}
+
+          {/* Modal / Caixa de Migração de Ticker */}
+          {showMigrateModal && (
+            <div className="p-5 bg-slate-900 border border-indigo-500/30 rounded-xl">
+              <h3 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
+                <ArrowLeftRight className="w-4 h-4 text-indigo-400" /> Atualizar / Migrar Ticker Histórico
+              </h3>
+              <p className="text-xs text-slate-400 mb-3">
+                Atualiza todos os lançamentos passados de um ticker que mudou de código (ex: fusão ou cisão), preservando o preço médio e histórico contábil.
+              </p>
+              <form onSubmit={handleMigrateTicker} className="flex flex-col sm:flex-row gap-3">
+                <input
+                  type="text"
+                  placeholder="Ticker Antigo (ex: HGLG11)"
+                  value={migrateOld}
+                  onChange={(e) => setMigrateOld(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase focus:outline-none focus:border-indigo-500 font-mono"
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Novo Ticker (ex: ALZR11)"
+                  value={migrateNew}
+                  onChange={(e) => setMigrateNew(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase focus:outline-none focus:border-indigo-500 font-mono"
+                  required
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition whitespace-nowrap"
+                >
+                  Atualizar Histórico
+                </button>
+              </form>
+              {migrateMsg && <p className="text-xs text-emerald-400 mt-2">{migrateMsg}</p>}
+            </div>
+          )}
+
+          {/* Botão para Nova Operação Manual */}
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-semibold text-white">Custódia Consolidada da Carteira</h3>
+            <button
+              onClick={() => setShowManualInvModal(!showManualInvModal)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-lg text-xs font-medium transition"
+            >
+              <PlusCircle className="w-3.5 h-3.5 text-indigo-400" /> Nova Operação Manual
+            </button>
+          </div>
+
+          {/* Form Operação Manual */}
+          {showManualInvModal && (
+            <form onSubmit={handleCreateManualInvestment} className="p-4 bg-slate-900 border border-slate-800 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              <input
+                type="text"
+                placeholder="Ticker (ex: PETR4, BBAS3)"
+                value={invTicker}
+                onChange={(e) => setInvTicker(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
+                required
+              />
+              <select
+                value={invOpType}
+                onChange={(e) => setInvOpType(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+              >
+                <option value="buy">Compra</option>
+                <option value="sell">Venda</option>
+                <option value="dividend">Dividendo</option>
+                <option value="jcp">Juros s/ Cap. Próprio (JCP)</option>
+                <option value="rendimento">Rendimento FII</option>
+              </select>
+              <input
+                type="number"
+                step="any"
+                placeholder="Quantidade"
+                value={invQty}
+                onChange={(e) => setInvQty(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Preço Unitário (R$)"
+                value={invUnitPrice}
+                onChange={(e) => setInvUnitPrice(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Custos / Taxas (R$)"
+                value={invCosts}
+                onChange={(e) => setInvCosts(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition"
+              >
+                Salvar Operação
+              </button>
+            </form>
+          )}
+
+          {/* Tabela de Custódia */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-300">
+                <thead className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4">Ticker</th>
+                    <th className="py-3 px-4">Ativo</th>
+                    <th className="py-3 px-4">Tipo</th>
+                    <th className="py-3 px-4 text-right">Qtd</th>
+                    <th className="py-3 px-4 text-right">Preço Médio</th>
+                    <th className="py-3 px-4 text-right">Total Investido</th>
+                    <th className="py-3 px-4 text-right">Proventos</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {portfolio.map((pos) => (
+                    <tr key={pos.asset_id} className="hover:bg-slate-800/30 transition">
+                      <td className="py-3 px-4 font-bold text-white font-mono">{pos.ticker}</td>
+                      <td className="py-3 px-4 text-xs text-slate-300">{pos.name}</td>
+                      <td className="py-3 px-4 text-xs">
+                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                          {pos.asset_type}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right text-xs font-mono">{Number(pos.quantity).toLocaleString('pt-BR')}</td>
+                      <td className="py-3 px-4 text-right text-xs font-mono">R$ {Number(pos.average_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                      <td className="py-3 px-4 text-right text-xs font-bold text-white font-mono">
+                        R$ {Number(pos.total_invested).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-3 px-4 text-right text-xs font-semibold text-emerald-400 font-mono">
+                        R$ {Number(pos.total_dividends).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))}
+                  {portfolio.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
+                        Nenhum ativo em carteira. Importe uma nota de corretagem em PDF (Sinacor) ou registre operações manuais.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Histórico Recente de Operações */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+              <h3 className="text-sm font-semibold text-white">Histórico de Operações e Proventos</h3>
+              <span className="text-xs text-slate-400">{invTransactions.length} registros</span>
+            </div>
+            <div className="overflow-x-auto max-h-80 overflow-y-auto">
+              <table className="w-full text-left text-xs text-slate-300">
+                <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider border-b border-slate-800 sticky top-0">
+                  <tr>
+                    <th className="py-2.5 px-4">Data</th>
+                    <th className="py-2.5 px-4">Ticker</th>
+                    <th className="py-2.5 px-4">Operação</th>
+                    <th className="py-2.5 px-4 text-right">Qtd</th>
+                    <th className="py-2.5 px-4 text-right">Preço Unit.</th>
+                    <th className="py-2.5 px-4 text-right">Taxas</th>
+                    <th className="py-2.5 px-4 text-right">Total</th>
+                    <th className="py-2.5 px-4">Origem</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {invTransactions.map((tx) => (
+                    <tr key={tx.id} className="hover:bg-slate-800/30">
+                      <td className="py-2.5 px-4 whitespace-nowrap text-slate-400">
+                        {new Date(tx.trade_date).toLocaleDateString('pt-BR')}
+                      </td>
+                      <td className="py-2.5 px-4 font-bold text-white font-mono">{tx.ticker}</td>
+                      <td className="py-2.5 px-4">
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                          tx.operation_type === 'buy' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                          tx.operation_type === 'sell' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' :
+                          'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                        }`}>
+                          {tx.operation_type === 'buy' ? 'Compra' : tx.operation_type === 'sell' ? 'Venda' : tx.operation_type}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 text-right font-mono">{Number(tx.quantity).toLocaleString('pt-BR')}</td>
+                      <td className="py-2.5 px-4 text-right font-mono">R$ {Number(tx.unit_price).toFixed(2)}</td>
+                      <td className="py-2.5 px-4 text-right text-slate-400 font-mono">R$ {Number(tx.costs).toFixed(2)}</td>
+                      <td className="py-2.5 px-4 text-right font-bold text-white font-mono">
+                        R$ {Number(tx.total_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </td>
+                      <td className="py-2.5 px-4 text-[10px] text-slate-400">
+                        {tx.source === 'pdf_sinacor' ? 'Nota B3 PDF' : tx.source === 'spreadsheet' ? 'Planilha' : 'Manual'}
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Boolean, Text
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -57,9 +57,11 @@ class InvestmentTransaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
-    operation_type = Column(String(50), nullable=False) # buy, sell, dividend, jcp
+    operation_type = Column(String(50), nullable=False) # buy, sell, dividend, jcp, amortization
     quantity = Column(Numeric(14, 4), default=0)
     unit_price = Column(Numeric(14, 4), default=0)
+    costs = Column(Numeric(14, 2), default=0.00)
     total_amount = Column(Numeric(14, 2), nullable=False)
     trade_date = Column(DateTime, nullable=False)
-    source = Column(String(50), default="manual")
+    source = Column(String(50), default="manual") # manual, sinacor_pdf, spreadsheet
+    notes = Column(String(255), nullable=True)

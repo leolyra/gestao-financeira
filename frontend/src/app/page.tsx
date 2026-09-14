@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { 
   Wallet, 
   TrendingUp, 
+  TrendingDown,
   Bell, 
   CreditCard, 
   PlusCircle, 
@@ -12,7 +13,12 @@ import {
   Tag, 
   LayoutDashboard,
   Building2,
-  CheckCircle2
+  CheckCircle2,
+  ArrowUpRight,
+  ArrowDownRight,
+  RefreshCw,
+  SlidersHorizontal,
+  Landmark
 } from 'lucide-react';
 import { fetchWithAuth, setToken, getToken, removeToken } from '@/lib/api';
 
@@ -21,6 +27,7 @@ interface Account {
   name: string;
   type: string;
   balance: number;
+  pluggy_account_id?: string;
 }
 
 interface Category {
@@ -30,10 +37,32 @@ interface Category {
   color: string;
 }
 
+interface Transaction {
+  id: number;
+  account_id: number;
+  category_id?: number;
+  description: string;
+  amount: number;
+  date: string;
+  is_manual: boolean;
+  pluggy_transaction_id?: string;
+  category_name?: string;
+  category_color?: string;
+  account_name?: string;
+}
+
+interface DashboardSummary {
+  total_income: number;
+  total_expense: number;
+  net_total: number;
+  expenses_by_category: { name: string; value: number; color: string }[];
+  monthly_trend: { month: string; income: number; expense: number }[];
+}
+
 export default function Home() {
   const [token, setTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'accounts' | 'categories'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'accounts' | 'categories'>('overview');
 
   // Auth State
   const [isRegister, setIsRegister] = useState(false);
@@ -46,47 +75,60 @@ export default function Home() {
   const [user, setUser] = useState<{ id: number; name: string; email: string } | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
 
-  // Account Form
+  // Forms
   const [newAccName, setNewAccName] = useState('');
   const [newAccType, setNewAccType] = useState('checking');
   const [newAccBalance, setNewAccBalance] = useState('');
 
-  // Category Form
   const [newCatName, setNewCatName] = useState('');
   const [newCatType, setNewCatType] = useState('expense');
   const [newCatColor, setNewCatColor] = useState('#3b82f6');
+
+  const [newTxDesc, setNewTxDesc] = useState('');
+  const [newTxAmount, setNewTxAmount] = useState('');
+  const [newTxType, setNewTxType] = useState<'expense' | 'income'>('expense');
+  const [newTxAccountId, setNewTxAccountId] = useState<number | ''>('');
+  const [newTxCategoryId, setNewTxCategoryId] = useState<number | ''>('');
+  const [newTxDate, setNewTxDate] = useState(new Date().toISOString().split('T')[0]);
+
+  // Pluggy Connect State
+  const [isConnectingPluggy, setIsConnectingPluggy] = useState(false);
+  const [pluggyStatusMsg, setPluggyStatusMsg] = useState('');
 
   useEffect(() => {
     const savedToken = getToken();
     if (savedToken) {
       setTokenState(savedToken);
-      loadUserData();
+      loadAllData();
     } else {
       setLoading(false);
     }
   }, []);
 
-  async function loadUserData() {
+  async function loadAllData() {
     try {
-      const [meRes, accRes, catRes] = await Promise.all([
+      const [meRes, accRes, catRes, txRes, sumRes] = await Promise.all([
         fetchWithAuth('/auth/me'),
         fetchWithAuth('/accounts/'),
-        fetchWithAuth('/categories/')
+        fetchWithAuth('/categories/'),
+        fetchWithAuth('/transactions/'),
+        fetchWithAuth('/transactions/summary?days=90')
       ]);
 
-      if (meRes.ok) {
-        const meData = await meRes.json();
-        setUser(meData);
-      }
+      if (meRes.ok) setUser(await meRes.json());
       if (accRes.ok) {
-        const accData = await accRes.json();
-        setAccounts(accData);
+        const accs = await accRes.json();
+        setAccounts(accs);
+        if (accs.length > 0 && newTxAccountId === '') {
+          setNewTxAccountId(accs[0].id);
+        }
       }
-      if (catRes.ok) {
-        const catData = await catRes.json();
-        setCategories(catData);
-      }
+      if (catRes.ok) setCategories(await catRes.json());
+      if (txRes.ok) setTransactions(await txRes.json());
+      if (sumRes.ok) setSummary(await sumRes.json());
     } catch (err) {
       console.error('Erro ao carregar dados:', err);
     } finally {
@@ -118,7 +160,7 @@ export default function Home() {
       setToken(data.access_token);
       setTokenState(data.access_token);
       setUser(data.user);
-      loadUserData();
+      loadAllData();
     } catch (err) {
       setAuthError('Falha na comunicação com a API.');
     }
@@ -130,8 +172,61 @@ export default function Home() {
     setUser(null);
     setAccounts([]);
     setCategories([]);
+    setTransactions([]);
   }
 
+  // Ações de Transação
+  async function handleCreateTransaction(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newTxDesc || !newTxAmount || !newTxAccountId) return;
+
+    const rawAmt = parseFloat(newTxAmount);
+    const finalAmt = newTxType === 'expense' ? -Math.abs(rawAmt) : Math.abs(rawAmt);
+
+    try {
+      const res = await fetchWithAuth('/transactions/', {
+        method: 'POST',
+        body: JSON.stringify({
+          account_id: Number(newTxAccountId),
+          category_id: newTxCategoryId ? Number(newTxCategoryId) : null,
+          description: newTxDesc,
+          amount: finalAmt,
+          date: new Date(newTxDate).toISOString(),
+          is_manual: true
+        })
+      });
+
+      if (res.ok) {
+        const created = await res.json();
+        setTransactions([created, ...transactions]);
+        setNewTxDesc('');
+        setNewTxAmount('');
+        loadAllData(); // atualiza saldos e dashboard
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleUpdateCategory(txId: number, catId: number | null) {
+    try {
+      const res = await fetchWithAuth(`/transactions/${txId}/category`, {
+        method: 'PATCH',
+        body: JSON.stringify({ category_id: catId })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setTransactions(transactions.map(t => t.id === txId ? updated : t));
+        // Recarrega summary para atualizar gráficos
+        const sumRes = await fetchWithAuth('/transactions/summary?days=90');
+        if (sumRes.ok) setSummary(await sumRes.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  // Contas
   async function handleCreateAccount(e: React.FormEvent) {
     e.preventDefault();
     if (!newAccName) return;
@@ -166,6 +261,7 @@ export default function Home() {
     }
   }
 
+  // Categorias
   async function handleCreateCategory(e: React.FormEvent) {
     e.preventDefault();
     if (!newCatName) return;
@@ -199,7 +295,66 @@ export default function Home() {
     }
   }
 
-  const totalBalance = accounts.reduce((sum, acc) => sum + (acc.type !== 'credit_card' ? Number(acc.balance) : 0), 0);
+  // Conexão Open Finance via Pluggy Connect
+  async function handleStartPluggyConnect() {
+    setIsConnectingPluggy(true);
+    setPluggyStatusMsg('Obtendo token de conexão seguro...');
+    try {
+      const res = await fetchWithAuth('/open-finance/connect-token', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setPluggyStatusMsg(`Aviso: Configure PLUGGY_CLIENT_ID e SECRET na API. Detalhe: ${data.detail || ''}`);
+        return;
+      }
+      
+      const connectToken = data.connectToken;
+      setPluggyStatusMsg('Abrindo Pluggy Connect Widget...');
+
+      // Carrega o script oficial do widget da Pluggy se não estiver presente
+      if (!(window as any).PluggyConnect) {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.pluggy.ai/connect-widget/2.0.0/pluggy-connect.js';
+        script.async = true;
+        script.onload = () => launchPluggyWidget(connectToken);
+        document.body.appendChild(script);
+      } else {
+        launchPluggyWidget(connectToken);
+      }
+    } catch (err: any) {
+      setPluggyStatusMsg('Falha ao conectar com serviço Pluggy: ' + err.message);
+    }
+  }
+
+  function launchPluggyWidget(connectToken: string) {
+    const pluggyConnect = new (window as any).PluggyConnect({
+      connectToken,
+      includeSandbox: true,
+      onSuccess: async (itemData: any) => {
+        setPluggyStatusMsg('Banco conectado! Sincronizando contas e extratos...');
+        try {
+          const syncRes = await fetchWithAuth('/open-finance/sync-item', {
+            method: 'POST',
+            body: JSON.stringify({ itemId: itemData.item.id })
+          });
+          const syncData = await syncRes.json();
+          setPluggyStatusMsg(`Sincronização concluída! ${syncData.transactions_synced} lançamentos importados.`);
+          loadAllData();
+        } catch (e: any) {
+          setPluggyStatusMsg('Erro na sincronização: ' + e.message);
+        }
+      },
+      onError: (error: any) => {
+        setPluggyStatusMsg('Conexão cancelada ou erro: ' + error.message);
+      },
+      onClose: () => {
+        setIsConnectingPluggy(false);
+      }
+    });
+    pluggyConnect.init();
+  }
+
+  const totalChecking = accounts.filter(a => a.type !== 'credit_card').reduce((sum, acc) => sum + Number(acc.balance), 0);
+  const totalCreditCards = accounts.filter(a => a.type === 'credit_card').reduce((sum, acc) => sum + Number(acc.balance), 0);
 
   if (loading) {
     return (
@@ -295,13 +450,16 @@ export default function Home() {
             Painel Financeiro
           </h1>
           <p className="text-sm text-slate-400">
-            Olá, <strong className="text-slate-200">{user?.name || 'Usuário'}</strong>
+            Bem-vindo, <strong className="text-slate-200">{user?.name}</strong>
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full text-xs font-medium flex items-center gap-1.5">
-            <CheckCircle2 className="w-3.5 h-3.5" /> Open Finance
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={handleStartPluggyConnect}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium shadow transition"
+          >
+            <Landmark className="w-3.5 h-3.5" /> Conectar Banco (Open Finance)
+          </button>
           <button
             onClick={handleLogout}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-lg text-xs transition"
@@ -310,6 +468,14 @@ export default function Home() {
           </button>
         </div>
       </header>
+
+      {/* Mensagens de status do Open Finance */}
+      {pluggyStatusMsg && (
+        <div className="mt-4 p-3 bg-indigo-950/50 border border-indigo-800/50 rounded-xl text-xs text-indigo-200 flex justify-between items-center">
+          <span>{pluggyStatusMsg}</span>
+          <button onClick={() => setPluggyStatusMsg('')} className="text-indigo-400 hover:underline text-[10px]">Fechar</button>
+        </div>
+      )}
 
       {/* Tabs Responsivas */}
       <nav className="flex space-x-2 border-b border-slate-800 mt-6 overflow-x-auto pb-2">
@@ -321,7 +487,17 @@ export default function Home() {
               : 'text-slate-400 hover:bg-slate-900 hover:text-white'
           }`}
         >
-          <LayoutDashboard className="w-4 h-4" /> Visão Geral
+          <LayoutDashboard className="w-4 h-4" /> Visão Geral & Dashboards
+        </button>
+        <button
+          onClick={() => setActiveTab('transactions')}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition whitespace-nowrap ${
+            activeTab === 'transactions'
+              ? 'bg-indigo-600 text-white'
+              : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+          }`}
+        >
+          <SlidersHorizontal className="w-4 h-4" /> Lançamentos / Extrato ({transactions.length})
         </button>
         <button
           onClick={() => setActiveTab('accounts')}
@@ -345,49 +521,295 @@ export default function Home() {
         </button>
       </nav>
 
-      {/* ABA 1: VISÃO GERAL */}
+      {/* ABA 1: VISÃO GERAL & DASHBOARDS */}
       {activeTab === 'overview' && (
         <section className="mt-6 space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* Cards Principais */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-sm font-medium">Saldo Total Líquido</span>
-                <Wallet className="w-5 h-5 text-indigo-400" />
+                <span className="text-xs font-medium uppercase tracking-wider">Saldo em Contas</span>
+                <Wallet className="w-4 h-4 text-indigo-400" />
               </div>
               <div className="mt-3">
                 <span className="text-2xl font-bold text-white">
-                  R$ {totalBalance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  R$ {totalChecking.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </span>
-                <p className="text-xs text-slate-400 mt-1">Soma de {accounts.length} contas cadastradas</p>
+                <p className="text-[11px] text-slate-500 mt-1">Líquido disponível</p>
               </div>
             </div>
 
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-sm font-medium">Patrimônio em Ativos</span>
-                <TrendingUp className="w-5 h-5 text-emerald-400" />
+                <span className="text-xs font-medium uppercase tracking-wider">Faturas de Cartão</span>
+                <CreditCard className="w-4 h-4 text-amber-400" />
               </div>
               <div className="mt-3">
-                <span className="text-2xl font-bold text-white">R$ 0,00</span>
-                <p className="text-xs text-slate-400 mt-1">Ações, FIIs, Renda Fixa e ETFs</p>
+                <span className="text-2xl font-bold text-amber-400">
+                  R$ {Math.abs(totalCreditCards).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">Compromisso em aberto</p>
               </div>
             </div>
 
-            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl sm:col-span-2 lg:col-span-1">
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-sm font-medium">Monitoramento de Ativos</span>
-                <Bell className="w-5 h-5 text-amber-400" />
+                <span className="text-xs font-medium uppercase tracking-wider">Receitas (90d)</span>
+                <ArrowUpRight className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="mt-3">
-                <span className="text-2xl font-bold text-white">0 Alertas</span>
-                <p className="text-xs text-slate-400 mt-1">Ollama local pronto para relatórios</p>
+                <span className="text-2xl font-bold text-emerald-400">
+                  R$ {Number(summary?.total_income || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">Entradas consolidadas</p>
+              </div>
+            </div>
+
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <div className="flex justify-between items-center text-slate-400">
+                <span className="text-xs font-medium uppercase tracking-wider">Despesas (90d)</span>
+                <ArrowDownRight className="w-4 h-4 text-rose-400" />
+              </div>
+              <div className="mt-3">
+                <span className="text-2xl font-bold text-rose-400">
+                  R$ {Number(summary?.total_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+                <p className="text-[11px] text-slate-500 mt-1">Saídas e pagamentos</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Gráficos e Distribuição */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Distribuição por Categoria */}
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                <Tag className="w-4 h-4 text-indigo-400" /> Composição de Gastos por Categoria (Últimos 90 dias)
+              </h3>
+              <div className="space-y-3">
+                {summary?.expenses_by_category.map((cat) => {
+                  const percent = summary.total_expense > 0 ? (Number(cat.value) / Number(summary.total_expense)) * 100 : 0;
+                  return (
+                    <div key={cat.name} className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-slate-300 font-medium">{cat.name}</span>
+                        <span className="text-slate-400">
+                          R$ {Number(cat.value).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({percent.toFixed(1)}%)
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${percent}%`,
+                            backgroundColor: cat.color || '#3b82f6'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+                {(!summary || summary.expenses_by_category.length === 0) && (
+                  <p className="text-xs text-slate-500 py-6 text-center">Nenhuma despesa registrada no período.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Evolução Mensal */}
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+              <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-emerald-400" /> Histórico Mensal (Receitas vs Despesas)
+              </h3>
+              <div className="space-y-4">
+                {summary?.monthly_trend.map((m) => {
+                  const inc = Number(m.income);
+                  const exp = Number(m.expense);
+                  const maxVal = Math.max(inc, exp, 1);
+                  return (
+                    <div key={m.month} className="p-3 bg-slate-800/40 border border-slate-800 rounded-lg">
+                      <div className="flex justify-between text-xs font-semibold mb-2">
+                        <span className="text-slate-200">{m.month}</span>
+                        <span className={inc >= exp ? 'text-emerald-400' : 'text-rose-400'}>
+                          Líquido: R$ {(inc - exp).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-2 text-[11px]">
+                          <span className="w-16 text-slate-400">Receitas</span>
+                          <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${(inc / maxVal) * 100}%` }} />
+                          </div>
+                          <span className="w-24 text-right text-emerald-400">R$ {inc.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px]">
+                          <span className="w-16 text-slate-400">Despesas</span>
+                          <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+                            <div className="h-full bg-rose-500 rounded-full" style={{ width: `${(exp / maxVal) * 100}%` }} />
+                          </div>
+                          <span className="w-24 text-right text-rose-400">R$ {exp.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {(!summary || summary.monthly_trend.length === 0) && (
+                  <p className="text-xs text-slate-500 py-6 text-center">Nenhum dado mensal registrado.</p>
+                )}
               </div>
             </div>
           </div>
         </section>
       )}
 
-      {/* ABA 2: CONTAS E CARTÕES */}
+      {/* ABA 2: LANÇAMENTOS & EXTRATO */}
+      {activeTab === 'transactions' && (
+        <section className="mt-6 space-y-6">
+          {/* Formulário de Novo Lançamento Manual */}
+          <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl">
+            <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+              <PlusCircle className="w-4 h-4 text-indigo-400" /> Registrar Novo Lançamento Manual
+            </h2>
+            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+              <div className="lg:col-span-2">
+                <input
+                  type="text"
+                  placeholder="Descrição (ex: Supermercado, Aluguel)"
+                  value={newTxDesc}
+                  onChange={(e) => setNewTxDesc(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <select
+                  value={newTxType}
+                  onChange={(e) => setNewTxType(e.target.value as 'expense' | 'income')}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="expense">Despesa (-)</option>
+                  <option value="income">Receita (+)</option>
+                </select>
+              </div>
+
+              <div>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Valor (R$)"
+                  value={newTxAmount}
+                  onChange={(e) => setNewTxAmount(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <select
+                  value={newTxAccountId}
+                  onChange={(e) => setNewTxAccountId(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                  required
+                >
+                  <option value="">Selecione a Conta</option>
+                  {accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <select
+                  value={newTxCategoryId}
+                  onChange={(e) => setNewTxCategoryId(e.target.value ? Number(e.target.value) : '')}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">Autocategorizar</option>
+                  {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+
+              <div className="sm:col-span-2 lg:col-span-6 flex justify-end">
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition"
+                >
+                  Salvar Lançamento
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Tabela de Lançamentos com Reclassificação Rápida */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+              <h3 className="text-sm font-semibold text-white">Extrato Consolidado de Transações</h3>
+              <span className="text-xs text-slate-400">{transactions.length} registros</span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm text-slate-300">
+                <thead className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
+                  <tr>
+                    <th className="py-3 px-4">Data</th>
+                    <th className="py-3 px-4">Descrição</th>
+                    <th className="py-3 px-4">Conta</th>
+                    <th className="py-3 px-4">Categoria</th>
+                    <th className="py-3 px-4 text-right">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {transactions.map((tx) => {
+                    const isIncome = Number(tx.amount) > 0;
+                    return (
+                      <tr key={tx.id} className="hover:bg-slate-800/30 transition">
+                        <td className="py-3 px-4 text-xs whitespace-nowrap text-slate-400">
+                          {new Date(tx.date).toLocaleDateString('pt-BR')}
+                        </td>
+                        <td className="py-3 px-4 font-medium text-white">
+                          <div className="flex items-center gap-2">
+                            <span>{tx.description}</span>
+                            {!tx.is_manual && (
+                              <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 text-[10px] rounded border border-emerald-500/20">
+                                Open Finance
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 text-xs text-slate-400 whitespace-nowrap">
+                          {tx.account_name || 'Conta Padrão'}
+                        </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <select
+                            value={tx.category_id || ''}
+                            onChange={(e) => handleUpdateCategory(tx.id, e.target.value ? Number(e.target.value) : null)}
+                            className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                          >
+                            <option value="">Sem Categoria</option>
+                            {categories.map((c) => (
+                              <option key={c.id} value={c.id}>{c.name}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {isIncome ? '+' : ''} R$ {Number(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {transactions.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-xs text-slate-500">
+                        Nenhum lançamento registrado. Conecte seu banco via Open Finance ou insira lançamentos manuais acima.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ABA 3: CONTAS E CARTÕES */}
       {activeTab === 'accounts' && (
         <section className="mt-6 space-y-6">
           <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl">
@@ -446,7 +868,7 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-bold text-white">
+                  <span className={`text-sm font-bold ${acc.type === 'credit_card' ? 'text-amber-400' : 'text-white'}`}>
                     R$ {Number(acc.balance).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </span>
                   <button
@@ -458,16 +880,11 @@ export default function Home() {
                 </div>
               </div>
             ))}
-            {accounts.length === 0 && (
-              <p className="text-xs text-slate-500 col-span-full py-4 text-center">
-                Nenhuma conta cadastrada ainda.
-              </p>
-            )}
           </div>
         </section>
       )}
 
-      {/* ABA 3: CATEGORIAS */}
+      {/* ABA 4: CATEGORIAS */}
       {activeTab === 'categories' && (
         <section className="mt-6 space-y-6">
           <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl">

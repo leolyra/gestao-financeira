@@ -874,14 +874,24 @@ export default function Home() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={() => setShowItemInput(!showItemInput)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow transition"
+            onClick={handleSyncAllExisting}
+            disabled={isConnectingPluggy}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow transition disabled:opacity-50"
+            title="Sincronizar todas as contas bancárias já autorizadas no Open Finance"
           >
-            <RefreshCw className="w-3.5 h-3.5" /> Sincronizar por Item ID
+            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingPluggy ? "animate-spin" : ""}`} /> Sincronizar Contas Cadastradas
+          </button>
+          <button
+            onClick={() => setShowItemInput(!showItemInput)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition"
+            title="Sincronizar informando o Item ID manualmente"
+          >
+            <SlidersHorizontal className="w-3.5 h-3.5" /> Item ID Manual
           </button>
           <button
             onClick={handleStartPluggyConnect}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium shadow transition"
+            disabled={isConnectingPluggy}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium shadow transition disabled:opacity-50"
           >
             <Landmark className="w-3.5 h-3.5" /> Nova Conexão
           </button>
@@ -1869,9 +1879,19 @@ export default function Home() {
       {activeTab === 'accounts' && (
         <section className="mt-6 space-y-6">
           <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl">
-            <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
-              <PlusCircle className="w-4 h-4 text-indigo-400" /> Adicionar Nova Conta ou Cartão
-            </h2>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <PlusCircle className="w-4 h-4 text-indigo-400" /> Adicionar Nova Conta ou Cartão
+              </h2>
+              <button
+                type="button"
+                onClick={handleSyncAllExisting}
+                disabled={isConnectingPluggy}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow transition disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isConnectingPluggy ? "animate-spin" : ""}`} /> Sincronizar Contas Cadastradas (Open Finance)
+              </button>
+            </div>
             <form onSubmit={handleCreateAccount} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <input
                 type="text"

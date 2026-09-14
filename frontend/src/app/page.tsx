@@ -22,7 +22,12 @@ import {
   FileText,
   UploadCloud,
   ArrowLeftRight,
-  PieChart
+  PieChart,
+  Sparkles,
+  Bot,
+  Target,
+  CheckCircle,
+  AlertCircle
 } from 'lucide-react';
 import { fetchWithAuth, setToken, getToken, removeToken } from '@/lib/api';
 
@@ -73,6 +78,55 @@ interface InvestmentSummary {
   positions_count: number;
 }
 
+interface AssetAlert {
+  id: number;
+  ticker: string;
+  asset_name: string;
+  rule_type: string;
+  target_value: number;
+  current_value?: number;
+  is_triggered: boolean;
+  is_active: boolean;
+  notes?: string;
+  created_at: string;
+}
+
+interface SwapResult {
+  capital_applied: number;
+  source: {
+    ticker: string;
+    price: number;
+    shares_to_sell: number;
+    dividend_yield_annual: number;
+    monthly_income: number;
+    annual_income: number;
+  };
+  target: {
+    ticker: string;
+    price: number;
+    shares_to_buy: number;
+    dividend_yield_annual: number;
+    monthly_income: number;
+    annual_income: number;
+  };
+  comparison: {
+    monthly_cashflow_increase: number;
+    annual_cashflow_increase: number;
+    percentage_increase: number;
+    recommendation: string;
+  };
+}
+
+interface AssetReportItem {
+  id: number;
+  ticker: string;
+  title: string;
+  report_type: string;
+  published_at?: string;
+  ai_summary: string;
+  created_at: string;
+}
+
 interface InvestmentTransaction {
   id: number;
   ticker: string;
@@ -99,7 +153,7 @@ interface DashboardSummary {
 export default function Home() {
   const [token, setTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'investments' | 'accounts' | 'categories'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'transactions' | 'investments' | 'monitoring' | 'accounts' | 'categories'>('overview');
 
   // Auth State
   const [isRegister, setIsRegister] = useState(false);
@@ -114,6 +168,32 @@ export default function Home() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+
+  // Monitoring & AI State
+  const [alerts, setAlerts] = useState<AssetAlert[]>([]);
+  const [reports, setReports] = useState<AssetReportItem[]>([]);
+  const [swapResult, setSwapResult] = useState<SwapResult | null>(null);
+
+  // Form Regra de Alerta
+  const [alertTicker, setAlertTicker] = useState("");
+  const [alertRuleType, setAlertRuleType] = useState("target_price_buy");
+  const [alertTargetValue, setAlertTargetValue] = useState("");
+  const [alertNotes, setAlertNotes] = useState("");
+
+  // Form Swap de Ativos
+  const [swapSourceTicker, setSwapSourceTicker] = useState("");
+  const [swapSourcePrice, setSwapSourcePrice] = useState("");
+  const [swapSourceYield, setSwapSourceYield] = useState("");
+  const [swapTargetTicker, setSwapTargetTicker] = useState("");
+  const [swapTargetPrice, setSwapTargetPrice] = useState("");
+  const [swapTargetYield, setSwapTargetYield] = useState("");
+  const [swapCapital, setSwapCapital] = useState("");
+
+  // Form Upload Relatório IA
+  const [reportTicker, setReportTicker] = useState("");
+  const [reportTitle, setReportTitle] = useState("");
+  const [isSummarizingReport, setIsSummarizingReport] = useState(false);
+  const [reportFeedback, setReportFeedback] = useState("");
 
   // Investment State
   const [portfolio, setPortfolio] = useState<PortfolioPosition[]>([]);
@@ -189,6 +269,13 @@ export default function Home() {
       if (invTxRes.ok) setInvTransactions(await invTxRes.json());
       if (invSumRes.ok) setInvSummary(await invSumRes.json());
 
+      const [alertsRes, reportsRes] = await Promise.all([
+        fetchWithAuth('/monitoring/rules'),
+        fetchWithAuth('/monitoring/reports')
+      ]);
+      if (alertsRes.ok) setAlerts(await alertsRes.json());
+      if (reportsRes.ok) setReports(await reportsRes.json());
+
       if (meRes.ok) setUser(await meRes.json());
       if (accRes.ok) {
         const accs = await accRes.json();
@@ -244,6 +331,128 @@ export default function Home() {
     setAccounts([]);
     setCategories([]);
     setTransactions([]);
+  }
+
+  // Funções de Monitoramento & IA
+  async function handleCreateAlert(e: React.FormEvent) {
+    e.preventDefault();
+    if (!alertTicker || !alertTargetValue) return;
+
+    try {
+      const res = await fetchWithAuth("/monitoring/rules", {
+        method: "POST",
+        body: JSON.stringify({
+          ticker: alertTicker.toUpperCase().trim(),
+          rule_type: alertRuleType,
+          target_value: parseFloat(alertTargetValue) || 0,
+          notes: alertNotes
+        })
+      });
+      if (res.ok) {
+        setAlertTicker("");
+        setAlertTargetValue("");
+        setAlertNotes("");
+        const aRes = await fetchWithAuth("/monitoring/rules");
+        if (aRes.ok) setAlerts(await aRes.json());
+      }
+    } catch (err: any) {
+      alert("Erro ao criar regra: " + err.message);
+    }
+  }
+
+  async function handleDeleteAlert(id: number) {
+    try {
+      const res = await fetchWithAuth(`/monitoring/rules/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setAlerts(alerts.filter(a => a.id !== id));
+      }
+    } catch (err: any) {
+      console.error(err);
+    }
+  }
+
+  async function handleCalculateSwap(e: React.FormEvent) {
+    e.preventDefault();
+    if (!swapSourceTicker || !swapTargetTicker || !swapCapital) return;
+
+    try {
+      const res = await fetchWithAuth("/monitoring/swap-analysis", {
+        method: "POST",
+        body: JSON.stringify({
+          source_ticker: swapSourceTicker.toUpperCase().trim(),
+          source_price: parseFloat(swapSourcePrice) || 1,
+          source_yield_annual: parseFloat(swapSourceYield) || 0,
+          target_ticker: swapTargetTicker.toUpperCase().trim(),
+          target_price: parseFloat(swapTargetPrice) || 1,
+          target_yield_annual: parseFloat(swapTargetYield) || 0,
+          capital_amount: parseFloat(swapCapital) || 0
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSwapResult(data);
+      }
+    } catch (err: any) {
+      alert("Erro no cálculo de troca: " + err.message);
+    }
+  }
+
+  async function handleAutoFetchReports() {
+    setIsSummarizingReport(true);
+    setReportFeedback("Buscando comunicados e relatórios recentes na CVM/B3 para todos os ativos em carteira...");
+    try {
+      const res = await fetchWithAuth("/monitoring/auto-fetch-reports", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setReportFeedback(`Aviso: ${data.detail || "Erro na busca automática"}`);
+        return;
+      }
+      setReportFeedback(`Busca concluída! ${data.new_reports_count} novo(s) relatório(s) encontrado(s) e analisado(s) pelo Ollama.`);
+      const rRes = await fetchWithAuth("/monitoring/reports");
+      if (rRes.ok) setReports(await rRes.json());
+    } catch (err: any) {
+      setReportFeedback("Erro: " + err.message);
+    } finally {
+      setIsSummarizingReport(false);
+    }
+  }
+
+  async function handleUploadReport(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !reportTicker || !reportTitle) {
+      alert("Preencha o Ticker e o Título do relatório antes de selecionar o PDF.");
+      return;
+    }
+
+    setIsSummarizingReport(true);
+    setReportFeedback("Enviando PDF e acionando IA (Ollama local)... isso pode levar cerca de 1 minuto.");
+    const formData = new FormData();
+    formData.append("ticker", reportTicker.toUpperCase().trim());
+    formData.append("title", reportTitle);
+    formData.append("file", file);
+
+    try {
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api-financeira.leo.lyra.nom.br"}/api/v1/monitoring/reports/summarize`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setReportFeedback(`Erro: ${data.detail || "Falha ao processar relatório"}`);
+        return;
+      }
+      setReportFeedback(`Sucesso! Relatório de ${data.ticker} analisado pelo Ollama com sucesso.`);
+      setReportTicker("");
+      setReportTitle("");
+      const rRes = await fetchWithAuth("/monitoring/reports");
+      if (rRes.ok) setReports(await rRes.json());
+    } catch (err: any) {
+      setReportFeedback("Erro no envio: " + err.message);
+    } finally {
+      setIsSummarizingReport(false);
+    }
   }
 
   // Funções de Investimentos
@@ -752,6 +961,16 @@ export default function Home() {
           }`}
         >
           <TrendingUp className="w-4 h-4" /> Investimentos & Carteira ({portfolio.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('monitoring')}
+          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition whitespace-nowrap ${
+            activeTab === 'monitoring'
+              ? 'bg-indigo-600 text-white'
+              : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 text-amber-400" /> Monitoramento & IA ({alerts.length})
         </button>
         <button
           onClick={() => setActiveTab('accounts')}
@@ -1336,6 +1555,311 @@ export default function Home() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* ABA MONITORAMENTO & IA (OLLAMA) */}
+      {activeTab === 'monitoring' && (
+        <section className="mt-6 space-y-8">
+          {/* SEÇÃO 1: REGRAS DE MONITORAMENTO */}
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Target className="w-5 h-5 text-indigo-400" /> Regras de Monitoramento de Ativos
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Defina preço-teto de compra, preço-alvo de venda, dividend yield mínimo ou P/VP máximo.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleCreateAlert} className="p-4 bg-slate-900 border border-slate-800 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              <input
+                type="text"
+                placeholder="Ticker (ex: BBAS3, B5P211)"
+                value={alertTicker}
+                onChange={(e) => setAlertTicker(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
+                required
+              />
+              <select
+                value={alertRuleType}
+                onChange={(e) => setAlertRuleType(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+              >
+                <option value="target_price_buy">Preço-Teto de Compra (R$)</option>
+                <option value="target_price_sell">Preço-Alvo de Venda (R$)</option>
+                <option value="min_yield">Dividend Yield Mínimo (%)</option>
+                <option value="max_pvp">P/VP Máximo Aceitável</option>
+              </select>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Valor Alvo"
+                value={alertTargetValue}
+                onChange={(e) => setAlertTargetValue(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <input
+                type="text"
+                placeholder="Observação (opcional)"
+                value={alertNotes}
+                onChange={(e) => setAlertNotes(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition"
+              >
+                Adicionar Regra
+              </button>
+            </form>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {alerts.map((a) => (
+                <div key={a.id} className="p-4 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-start">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-white text-sm font-mono">{a.ticker}</span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-300 border border-slate-700">
+                        {a.rule_type === "target_price_buy" ? "Preço Compra" :
+                         a.rule_type === "target_price_sell" ? "Preço Venda" :
+                         a.rule_type === "min_yield" ? "Yield Mínimo" : "P/VP Máximo"}
+                      </span>
+                    </div>
+                    <div className="mt-2 text-xs">
+                      <span className="text-slate-400">Meta: </span>
+                      <strong className="text-white font-mono">
+                        {a.rule_type.includes("price") ? `R$ ${Number(a.target_value).toFixed(2)}` :
+                         a.rule_type === "min_yield" ? `${Number(a.target_value)}% a.a.` :
+                         Number(a.target_value).toFixed(2)}
+                      </strong>
+                    </div>
+                    {a.notes && <p className="text-[11px] text-slate-500 mt-1">{a.notes}</p>}
+                  </div>
+                  <button
+                    onClick={() => handleDeleteAlert(a.id)}
+                    className="p-1.5 text-slate-500 hover:text-rose-400 transition"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              {alerts.length === 0 && (
+                <p className="text-xs text-slate-500 col-span-full py-4 text-center">
+                  Nenhuma regra de monitoramento cadastrada. Adicione alertas acima.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* SEÇÃO 2: OTIMIZADOR DE PROVENTOS / SUGESTÃO DE TROCA */}
+          <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl space-y-4">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <ArrowLeftRight className="w-5 h-5 text-emerald-400" /> Otimizador de Proventos (Sugestão de Troca de Ativos)
+              </h2>
+              <p className="text-xs text-slate-400">
+                Calcule o ganho de fluxo de dividendos transferindo o mesmo montante financeiro entre dois ativos.
+              </p>
+            </div>
+
+            <form onSubmit={handleCalculateSwap} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+              <input
+                type="text"
+                placeholder="Ativo Origem (ex: HGLG11)"
+                value={swapSourceTicker}
+                onChange={(e) => setSwapSourceTicker(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Cotação Origem (R$)"
+                value={swapSourcePrice}
+                onChange={(e) => setSwapSourcePrice(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="DY Anual Origem (%)"
+                value={swapSourceYield}
+                onChange={(e) => setSwapSourceYield(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <input
+                type="text"
+                placeholder="Ativo Destino (ex: BTLG11)"
+                value={swapTargetTicker}
+                onChange={(e) => setSwapTargetTicker(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Cotação Destino (R$)"
+                value={swapTargetPrice}
+                onChange={(e) => setSwapTargetPrice(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="DY Anual Destino (%)"
+                value={swapTargetYield}
+                onChange={(e) => setSwapTargetYield(e.target.value)}
+                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                required
+              />
+              <div className="sm:col-span-2 lg:col-span-1">
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Valor Aplicado (R$)"
+                  value={swapCapital}
+                  onChange={(e) => setSwapCapital(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                  required
+                />
+              </div>
+              <div className="sm:col-span-2 lg:col-span-7 flex justify-end">
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition"
+                >
+                  Simular Otimização de Proventos
+                </button>
+              </div>
+            </form>
+
+            {swapResult && (
+              <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-3 bg-slate-900/60 rounded-lg">
+                  <span className="text-[11px] text-slate-400">Ativo Atual ({swapResult.source.ticker})</span>
+                  <div className="mt-1 font-mono">
+                    <p className="text-sm text-white">{swapResult.source.shares_to_sell} cotas (R$ {swapResult.source.price})</p>
+                    <p className="text-xs text-slate-300 mt-1">Rendimento: <strong>R$ {swapResult.source.monthly_income.toFixed(2)}/mês</strong></p>
+                    <p className="text-[10px] text-slate-500">DY Anual: {swapResult.source.dividend_yield_annual}%</p>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-900/60 rounded-lg border border-indigo-500/20">
+                  <span className="text-[11px] text-indigo-400">Ativo Sugerido ({swapResult.target.ticker})</span>
+                  <div className="mt-1 font-mono">
+                    <p className="text-sm text-white">{swapResult.target.shares_to_buy} cotas (R$ {swapResult.target.price})</p>
+                    <p className="text-xs text-emerald-400 mt-1">Rendimento: <strong>R$ {swapResult.target.monthly_income.toFixed(2)}/mês</strong></p>
+                    <p className="text-[10px] text-slate-500">DY Anual: {swapResult.target.dividend_yield_annual}%</p>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-slate-900/60 rounded-lg flex flex-col justify-center">
+                  <span className="text-[11px] text-emerald-400 uppercase font-semibold tracking-wider">Ganho Adicional Estimado</span>
+                  <div className="mt-1">
+                    <p className="text-xl font-bold text-emerald-400 font-mono">
+                      + R$ {swapResult.comparison.monthly_cashflow_increase.toFixed(2)}/mês
+                    </p>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      +{swapResult.comparison.percentage_increase}% de fluxo financeiro
+                    </p>
+                    <span className="inline-block mt-2 px-2 py-0.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded text-[10px]">
+                      {swapResult.comparison.recommendation}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SEÇÃO 3: CENTRAL DE RELATÓRIOS & IA (OLLAMA LOCAL) */}
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Bot className="w-5 h-5 text-indigo-400" /> Inteligência de Relatórios (Ollama Local)
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Envie o relatório gerencial em PDF da gestora ou fato relevante para o Ollama extrair os pontos cruciais.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Ticker do Ativo (ex: BTLG11, PETR4)"
+                  value={reportTicker}
+                  onChange={(e) => setReportTicker(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
+                />
+                <input
+                  type="text"
+                  placeholder="Título (ex: Relatório Gerencial Julho/2026)"
+                  value={reportTitle}
+                  onChange={(e) => setReportTitle(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                />
+                <label className="cursor-pointer text-center px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1.5">
+                  <UploadCloud className="w-4 h-4" />
+                  {isSummarizingReport ? "Processando..." : "Upload Manual de PDF"}
+                  <input type="file" accept=".pdf" onChange={handleUploadReport} disabled={isSummarizingReport} className="hidden" />
+                </label>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={handleAutoFetchReports}
+                  disabled={isSummarizingReport}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow transition flex items-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSummarizingReport ? "animate-spin" : ""}`} />
+                  {isSummarizingReport ? "Buscando e Resumindo com Ollama..." : "Buscar Novos Relatórios da Carteira (Automático)"}
+                </button>
+              </div>
+
+              {reportFeedback && (
+                <div className="p-3 bg-slate-950 border border-indigo-500/30 rounded-lg text-xs text-indigo-200">
+                  {reportFeedback}
+                </div>
+              )}
+            </div>
+
+            {/* Lista de Relatórios com Análise de IA */}
+            <div className="space-y-4">
+              {reports.map((rep) => (
+                <div key={rep.id} className="p-5 bg-slate-900 border border-slate-800 rounded-xl space-y-3">
+                  <div className="flex justify-between items-start border-b border-slate-800 pb-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white font-mono text-sm">{rep.ticker}</span>
+                        <h3 className="text-sm font-semibold text-slate-200">{rep.title}</h3>
+                      </div>
+                      <span className="text-[10px] text-slate-500">
+                        Analisado em {new Date(rep.created_at).toLocaleDateString('pt-BR')} via Ollama local
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap font-sans bg-slate-950 p-4 rounded-lg border border-slate-850">
+                    {rep.ai_summary}
+                  </div>
+                </div>
+              ))}
+              {reports.length === 0 && (
+                <p className="text-xs text-slate-500 py-6 text-center">
+                  Nenhum relatório analisado ainda. Faça upload de um relatório gerencial em PDF para a IA resumir.
+                </p>
+              )}
             </div>
           </div>
         </section>

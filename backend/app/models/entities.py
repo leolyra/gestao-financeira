@@ -65,3 +65,28 @@ class InvestmentTransaction(Base):
     trade_date = Column(DateTime, nullable=False)
     source = Column(String(50), default="manual") # manual, sinacor_pdf, spreadsheet
     notes = Column(String(255), nullable=True)
+
+class AssetAlert(Base):
+    __tablename__ = "asset_alerts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
+    rule_type = Column(String(50), nullable=False) # target_price_buy, target_price_sell, min_yield, max_pvp
+    target_value = Column(Numeric(14, 2), nullable=False)
+    current_value = Column(Numeric(14, 2), nullable=True)
+    is_triggered = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)
+    notes = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AssetReport(Base):
+    __tablename__ = "asset_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    asset_id = Column(Integer, ForeignKey("assets.id"), nullable=False)
+    title = Column(String(200), nullable=False)
+    report_type = Column(String(50), default="gerencial") # gerencial, fato_relevante, resultados
+    published_at = Column(DateTime, nullable=True)
+    ai_summary = Column(Text, nullable=False)
+    key_points = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

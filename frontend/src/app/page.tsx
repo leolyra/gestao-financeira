@@ -313,7 +313,7 @@ export default function Home() {
       // Carrega o script oficial do widget da Pluggy se não estiver presente
       if (!(window as any).PluggyConnect) {
         const script = document.createElement('script');
-        script.src = 'https://cdn.pluggy.ai/connect-widget/2.0.0/pluggy-connect.js';
+        script.src = 'https://cdn.pluggy.ai/pluggy-connect/v2.7.0/pluggy-connect.js';
         script.async = true;
         script.onload = () => launchPluggyWidget(connectToken);
         document.body.appendChild(script);

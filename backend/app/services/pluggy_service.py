@@ -14,7 +14,7 @@ class PluggyService:
         if self._api_key:
             return self._api_key
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(
                 f"{BASE_URL}/auth",
                 json={
@@ -30,7 +30,7 @@ class PluggyService:
 
     async def create_connect_token(self) -> str:
         api_key = await self.get_api_key()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(
                 f"{BASE_URL}/connect_token",
                 headers={"X-API-KEY": api_key}
@@ -39,9 +39,20 @@ class PluggyService:
                 raise Exception(f"Erro ao gerar connect token: {res.text}")
             return res.json().get("accessToken")
 
+    async def get_all_items(self) -> List[Dict[str, Any]]:
+        api_key = await self.get_api_key()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.get(
+                f"{BASE_URL}/items",
+                headers={"X-API-KEY": api_key}
+            )
+            if res.status_code != 200:
+                raise Exception(f"Erro ao buscar conexoes existentes: {res.text}")
+            return res.json().get("results", [])
+
     async def get_accounts(self, item_id: str) -> List[Dict[str, Any]]:
         api_key = await self.get_api_key()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.get(
                 f"{BASE_URL}/accounts",
                 params={"itemId": item_id},
@@ -53,10 +64,10 @@ class PluggyService:
 
     async def get_transactions(self, account_id: str) -> List[Dict[str, Any]]:
         api_key = await self.get_api_key()
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.get(
                 f"{BASE_URL}/transactions",
-                params={"accountId": account_id, "pageSize": 100},
+                params={"accountId": account_id, "pageSize": 500},
                 headers={"X-API-KEY": api_key}
             )
             if res.status_code != 200:

@@ -295,6 +295,26 @@ export default function Home() {
     }
   }
 
+  // Sincronizar conexões já existentes no Pluggy
+  async function handleSyncAllExisting() {
+    setIsConnectingPluggy(true);
+    setPluggyStatusMsg("Buscando todas as contas já autorizadas na Pluggy...");
+    try {
+      const res = await fetchWithAuth("/open-finance/sync-all", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setPluggyStatusMsg(`Aviso: ${data.detail || "Erro ao buscar conexões"}`);
+        return;
+      }
+      setPluggyStatusMsg(`Sincronização concluída! ${data.items_count} instituição(ões) encontrada(s), ${data.accounts_synced} novas contas e ${data.transactions_synced} transações importadas.`);
+      loadAllData();
+    } catch (err: any) {
+      setPluggyStatusMsg("Erro ao sincronizar dados: " + err.message);
+    } finally {
+      setIsConnectingPluggy(false);
+    }
+  }
+
   // Conexão Open Finance via Pluggy Connect
   async function handleStartPluggyConnect() {
     setIsConnectingPluggy(true);
@@ -328,7 +348,7 @@ export default function Home() {
   function launchPluggyWidget(connectToken: string) {
     const pluggyConnect = new (window as any).PluggyConnect({
       connectToken,
-      includeSandbox: true,
+      // includeSandbox: false,
       onSuccess: async (itemData: any) => {
         setPluggyStatusMsg('Banco conectado! Sincronizando contas e extratos...');
         try {
@@ -455,10 +475,17 @@ export default function Home() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
+            onClick={handleSyncAllExisting}
+            disabled={isConnectingPluggy}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium shadow transition disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingPluggy ? "animate-spin" : ""}`} /> Sincronizar Contas Já Conectadas
+          </button>
+          <button
             onClick={handleStartPluggyConnect}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium shadow transition"
           >
-            <Landmark className="w-3.5 h-3.5" /> Conectar Banco (Open Finance)
+            <Landmark className="w-3.5 h-3.5" /> Nova Conexão
           </button>
           <button
             onClick={handleLogout}

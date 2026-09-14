@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.entities import Account, Transaction, User
@@ -16,7 +17,7 @@ async def get_connect_token(current_user: User = Depends(get_current_user)):
     if not settings.PLUGGY_CLIENT_ID or not settings.PLUGGY_CLIENT_SECRET:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Credenciais da Pluggy não configuradas. Adicione PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET nas variáveis de ambiente da API no Easypanel."
+            detail="Credenciais da Pluggy não configuradas. Adicione PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET no Easypanel."
         )
 
     try:
@@ -27,6 +28,91 @@ async def get_connect_token(current_user: User = Depends(get_current_user)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Falha na autenticação da Pluggy: {str(e)}"
         )
+
+async def _process_item(item_id: str, current_user_id: int, db: Session):
+    pluggy_accounts = await pluggy_service.get_accounts(item_id)
+    synced_accs = 0
+    synced_txs = 0
+
+    for p_acc in pluggy_accounts:
+        p_acc_id = p_acc.get("id")
+        acc_name = p_acc.get("name") or p_acc.get("marketingName") or "Conta Bancária"
+        acc_type = "checking" if p_acc.get("type") == "BANK" else "credit_card"
+        acc_balance = Decimal(str(p_acc.get("balance", 0)))
+
+        account = db.query(Account).filter(Account.pluggy_account_id == p_acc_id).first()
+        if not account:
+            account = Account(
+                user_id=current_user_id,
+                name=acc_name,
+                type=acc_type,
+                pluggy_account_id=p_acc_id,
+                balance=acc_balance
+            )
+            db.add(account)
+            db.commit()
+            db.refresh(account)
+            synced_accs += 1
+        else:
+            account.balance = acc_balance
+            db.commit()
+
+        p_txs = await pluggy_service.get_transactions(p_acc_id)
+        for p_tx in p_txs:
+            tx_id = p_tx.get("id")
+            existing_tx = db.query(Transaction).filter(Transaction.pluggy_transaction_id == tx_id).first()
+            if not existing_tx:
+                desc = p_tx.get("description") or "Transação Bancária"
+                amount = Decimal(str(p_tx.get("amount", 0)))
+                raw_date = p_tx.get("date", "")
+                tx_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00")) if raw_date else datetime.utcnow()
+
+                cat_id = auto_categorize(desc, current_user_id, db)
+
+                new_tx = Transaction(
+                    account_id=account.id,
+                    category_id=cat_id,
+                    description=desc,
+                    amount=amount,
+                    date=tx_date,
+                    is_manual=False,
+                    pluggy_transaction_id=tx_id
+                )
+                db.add(new_tx)
+                synced_txs += 1
+
+    db.commit()
+    return synced_accs, synced_txs
+
+@router.post("/sync-all")
+async def sync_all_existing_items(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    try:
+        items = await pluggy_service.get_all_items()
+        total_accounts = 0
+        total_transactions = 0
+        items_processed = 0
+
+        for item in items:
+            item_id = item.get("id")
+            if not item_id:
+                continue
+            accs, txs = await _process_item(item_id, current_user.id, db)
+            total_accounts += accs
+            total_transactions += txs
+            items_processed += 1
+
+        return {
+            "status": "success",
+            "items_count": items_processed,
+            "accounts_synced": total_accounts,
+            "transactions_synced": total_transactions
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/sync-item")
 async def sync_item(
@@ -39,61 +125,11 @@ async def sync_item(
         raise HTTPException(status_code=400, detail="itemId é obrigatório.")
 
     try:
-        pluggy_accounts = await pluggy_service.get_accounts(item_id)
-        synced_accounts = 0
-        synced_transactions = 0
-
-        for p_acc in pluggy_accounts:
-            p_acc_id = p_acc.get("id")
-            acc_name = p_acc.get("name") or p_acc.get("marketingName") or "Conta Open Finance"
-            acc_type = "checking" if p_acc.get("type") == "BANK" else "credit_card"
-            acc_balance = Decimal(str(p_acc.get("balance", 0)))
-
-            account = db.query(Account).filter(Account.pluggy_account_id == p_acc_id).first()
-            if not account:
-                account = Account(
-                    user_id=current_user.id,
-                    name=acc_name,
-                    type=acc_type,
-                    pluggy_account_id=p_acc_id,
-                    balance=acc_balance
-                )
-                db.add(account)
-                db.commit()
-                db.refresh(account)
-                synced_accounts += 1
-            else:
-                account.balance = acc_balance
-                db.commit()
-
-            p_txs = await pluggy_service.get_transactions(p_acc_id)
-            for p_tx in p_txs:
-                tx_id = p_tx.get("id")
-                existing_tx = db.query(Transaction).filter(Transaction.pluggy_transaction_id == tx_id).first()
-                if not existing_tx:
-                    desc = p_tx.get("description") or "Transação Open Finance"
-                    amount = Decimal(str(p_tx.get("amount", 0)))
-                    tx_date = datetime.fromisoformat(p_tx.get("date").replace("Z", "+00:00"))
-
-                    cat_id = auto_categorize(desc, current_user.id, db)
-
-                    new_tx = Transaction(
-                        account_id=account.id,
-                        category_id=cat_id,
-                        description=desc,
-                        amount=amount,
-                        date=tx_date,
-                        is_manual=False,
-                        pluggy_transaction_id=tx_id
-                    )
-                    db.add(new_tx)
-                    synced_transactions += 1
-
-        db.commit()
+        accs, txs = await _process_item(item_id, current_user.id, db)
         return {
             "status": "success",
-            "accounts_synced": synced_accounts,
-            "transactions_synced": synced_transactions
+            "accounts_synced": accs,
+            "transactions_synced": txs
         }
     except Exception as e:
         db.rollback()

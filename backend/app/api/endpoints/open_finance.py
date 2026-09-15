@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.models.entities import Account, Transaction, User, Asset, InvestmentTransaction
 from app.services.pluggy_service import pluggy_service
-from app.services.categorizer import auto_categorize
+from app.services.categorizer import auto_categorize, detect_cost_type
 from app.api.deps import get_current_user
 from app.api.endpoints.investments import get_or_create_asset
 
@@ -66,6 +66,7 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
         tx_date = datetime.utcnow()
 
     cat_id = auto_categorize(desc, user_id, db)
+    c_type = detect_cost_type(desc)
 
     new_tx = Transaction(
         account_id=account_id,
@@ -74,7 +75,8 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
         amount=amount,
         date=tx_date,
         is_manual=False,
-        pluggy_transaction_id=tx_id
+        pluggy_transaction_id=tx_id,
+        cost_type=c_type
     )
     db.add(new_tx)
     return True

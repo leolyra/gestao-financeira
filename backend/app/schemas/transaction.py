@@ -10,12 +10,16 @@ class TransactionBase(BaseModel):
     amount: Decimal
     date: datetime
     is_manual: bool = True
+    cost_type: Optional[str] = "variavel"
 
 class TransactionCreate(TransactionBase):
     pass
 
 class TransactionUpdateCategory(BaseModel):
     category_id: Optional[int]
+
+class TransactionUpdateCostType(BaseModel):
+    cost_type: str
 
 class TransactionResponse(TransactionBase):
     id: int
@@ -33,3 +37,4 @@ class DashboardSummary(BaseModel):
     net_total: Decimal
     expenses_by_category: List[Dict[str, Any]]
     monthly_trend: List[Dict[str, Any]]
+    cost_type_summary: Optional[Dict[str, Any]] = None

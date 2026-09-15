@@ -12,6 +12,8 @@ def run_migrations():
             conn.execute(text('ALTER TABLE investment_transactions ADD COLUMN IF NOT EXISTS costs NUMERIC(14, 2) DEFAULT 0.00;'))
             conn.execute(text('ALTER TABLE investment_transactions ADD COLUMN IF NOT EXISTS notes VARCHAR(255);'))
             conn.execute(text('ALTER TABLE accounts ADD COLUMN IF NOT EXISTS pluggy_item_id VARCHAR(100);'))
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS cost_type VARCHAR(20) DEFAULT 'variavel';"))
+            conn.execute(text("UPDATE transactions SET cost_type = 'variavel' WHERE cost_type IS NULL;"))
             print('Database auto-migrations executed successfully.')
     except Exception as e:
         print(f'Migration notice: {e}')

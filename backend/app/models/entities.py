@@ -38,6 +38,7 @@ class Transaction(Base):
     date = Column(DateTime, nullable=False)
     is_manual = Column(Boolean, default=False)
     pluggy_transaction_id = Column(String(100), nullable=True)
+    cost_type = Column(String(20), default="variavel", nullable=False) # fixa, variavel
 
 class Asset(Base):
     __tablename__ = "assets"

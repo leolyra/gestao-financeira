@@ -58,6 +58,7 @@ interface Transaction {
   category_name?: string;
   category_color?: string;
   account_name?: string;
+  cost_type?: 'fixa' | 'variavel';
 }
 
 interface PortfolioPosition {
@@ -148,6 +149,16 @@ interface DashboardSummary {
   net_total: number;
   expenses_by_category: { name: string; value: number; color: string }[];
   monthly_trend: { month: string; income: number; expense: number }[];
+  cost_type_summary?: {
+    fixed_expense: number;
+    variable_expense: number;
+    fixed_income: number;
+    variable_income: number;
+    fixed_expense_pct: number;
+    variable_expense_pct: number;
+    fixed_income_pct: number;
+    variable_income_pct: number;
+  };
 }
 
 export default function Home() {
@@ -239,6 +250,8 @@ export default function Home() {
   const [newTxAccountId, setNewTxAccountId] = useState<number | ''>('');
   const [newTxCategoryId, setNewTxCategoryId] = useState<number | ''>('');
   const [newTxDate, setNewTxDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newTxCostType, setNewTxCostType] = useState<'variavel' | 'fixa'>('variavel');
+  const [filterCostType, setFilterCostType] = useState<'all' | 'fixa' | 'variavel'>('all');
 
   // Pluggy Connect State
   const [isConnectingPluggy, setIsConnectingPluggy] = useState(false);
@@ -548,7 +561,8 @@ export default function Home() {
           description: newTxDesc,
           amount: finalAmt,
           date: new Date(newTxDate).toISOString(),
-          is_manual: true
+          is_manual: true,
+          cost_type: newTxCostType
         })
       });
 
@@ -573,7 +587,23 @@ export default function Home() {
       if (res.ok) {
         const updated = await res.json();
         setTransactions(transactions.map(t => t.id === txId ? updated : t));
-        // Recarrega summary para atualizar gráficos
+        const sumRes = await fetchWithAuth('/transactions/summary?days=90');
+        if (sumRes.ok) setSummary(await sumRes.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleUpdateCostType(txId: number, costType: string) {
+    try {
+      const res = await fetchWithAuth(`/transactions/${txId}/cost-type`, {
+        method: 'PATCH',
+        body: JSON.stringify({ cost_type: costType })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
         const sumRes = await fetchWithAuth('/transactions/summary?days=90');
         if (sumRes.ok) setSummary(await sumRes.json());
       }
@@ -1071,7 +1101,94 @@ export default function Home() {
           </div>
 
           {/* Gráficos e Distribuição */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* 1. Despesas Fixas vs. Variáveis */}
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <PieChart className="w-4 h-4 text-purple-400" /> Fixas vs. Variáveis (90d)
+                  </h3>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-medium">
+                    Estrutura de Custos
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mb-4">
+                  Distribuição para análise de rigidez e flexibilidade do orçamento.
+                </p>
+
+                {/* Barra Proporcional Fixa x Variável */}
+                <div className="space-y-2 mb-5">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span className="text-purple-400 flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-purple-500"></span>
+                      Fixas: {summary?.cost_type_summary?.fixed_expense_pct ?? 0}%
+                    </span>
+                    <span className="text-amber-400 flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                      Variáveis: {summary?.cost_type_summary?.variable_expense_pct ?? 0}%
+                    </span>
+                  </div>
+
+                  {/* Barra Segmentada Visual */}
+                  <div className="w-full h-4 bg-slate-800 rounded-full overflow-hidden flex shadow-inner">
+                    <div
+                      className="bg-purple-500 hover:bg-purple-400 transition-all duration-500"
+                      style={{ width: `${summary?.cost_type_summary?.fixed_expense_pct ?? 0}%` }}
+                      title={`Despesas Fixas: R$ ${Number(summary?.cost_type_summary?.fixed_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                    />
+                    <div
+                      className="bg-amber-500 hover:bg-amber-400 transition-all duration-500"
+                      style={{ width: `${summary?.cost_type_summary?.variable_expense_pct ?? 0}%` }}
+                      title={`Despesas Variáveis: R$ ${Number(summary?.cost_type_summary?.variable_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[11px] text-slate-400 pt-1">
+                    <span>R$ {Number(summary?.cost_type_summary?.fixed_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                    <span>R$ {Number(summary?.cost_type_summary?.variable_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
+
+                {/* Cards Detalhados */}
+                <div className="space-y-2.5">
+                  <div className="p-3 bg-purple-950/20 border border-purple-800/30 rounded-lg flex justify-between items-center">
+                    <div>
+                      <span className="text-xs font-medium text-purple-200 block">Custos Fixos</span>
+                      <span className="text-[10px] text-slate-400">Moradia, internet, assinaturas, contas</span>
+                    </div>
+                    <span className="text-sm font-bold text-purple-300">
+                      R$ {Number(summary?.cost_type_summary?.fixed_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-amber-950/20 border border-amber-800/30 rounded-lg flex justify-between items-center">
+                    <div>
+                      <span className="text-xs font-medium text-amber-200 block">Custos Variáveis</span>
+                      <span className="text-[10px] text-slate-400">Mercado, lazer, compras, imprevistos</span>
+                    </div>
+                    <span className="text-sm font-bold text-amber-300">
+                      R$ {Number(summary?.cost_type_summary?.variable_expense || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Indicador de Resiliência */}
+              <div className="mt-4 p-3 bg-slate-800/40 rounded-lg border border-slate-700/50 text-xs">
+                {(summary?.cost_type_summary?.fixed_expense_pct ?? 0) <= 50 ? (
+                  <span className="text-emerald-400 font-medium flex items-start gap-1.5">
+                    <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><strong>Boa Flexibilidade:</strong> Seus custos fixos estão abaixo de 50% das despesas totais.</span>
+                  </span>
+                ) : (
+                  <span className="text-amber-400 font-medium flex items-start gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><strong>Atenção aos Custos Fixos:</strong> Mais de 50% dos gastos são fixos. Reduzir contratos amplia sua margem de investimentos.</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
             {/* Distribuição por Categoria */}
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -1160,7 +1277,7 @@ export default function Home() {
             <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
               <PlusCircle className="w-4 h-4 text-indigo-400" /> Registrar Novo Lançamento Manual
             </h2>
-            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
               <div className="lg:col-span-2">
                 <input
                   type="text"
@@ -1218,7 +1335,18 @@ export default function Home() {
                 </select>
               </div>
 
-              <div className="sm:col-span-2 lg:col-span-6 flex justify-end">
+              <div>
+                <select
+                  value={newTxCostType}
+                  onChange={(e) => setNewTxCostType(e.target.value as 'variavel' | 'fixa')}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="variavel">Gasto Variável</option>
+                  <option value="fixa">Gasto Fixo</option>
+                </select>
+              </div>
+
+              <div className="sm:col-span-2 lg:col-span-7 flex justify-end">
                 <button
                   type="submit"
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition"
@@ -1231,9 +1359,23 @@ export default function Home() {
 
           {/* Tabela de Lançamentos com Reclassificação Rápida */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center">
-              <h3 className="text-sm font-semibold text-white">Extrato Consolidado de Transações</h3>
-              <span className="text-xs text-slate-400">{transactions.length} registros</span>
+            <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Extrato Consolidado de Transações</h3>
+                <span className="text-xs text-slate-400">{transactions.filter(t => filterCostType === 'all' || (t.cost_type || 'variavel') === filterCostType).length} de {transactions.length} registros</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">Filtrar:</span>
+                <select
+                  value={filterCostType}
+                  onChange={(e) => setFilterCostType(e.target.value as any)}
+                  className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="all">Todas as transações</option>
+                  <option value="fixa">Apenas Fixas</option>
+                  <option value="variavel">Apenas Variáveis</option>
+                </select>
+              </div>
             </div>
 
             <div className="overflow-x-auto">
@@ -1244,11 +1386,12 @@ export default function Home() {
                     <th className="py-3 px-4">Descrição</th>
                     <th className="py-3 px-4">Conta</th>
                     <th className="py-3 px-4">Categoria</th>
+                    <th className="py-3 px-4">Tipo</th>
                     <th className="py-3 px-4 text-right">Valor</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
-                  {transactions.map((tx) => {
+                  {transactions.filter(t => filterCostType === "all" || (t.cost_type || "variavel") === filterCostType).map((tx) => {
                     const isIncome = Number(tx.amount) > 0;
                     return (
                       <tr key={tx.id} className="hover:bg-slate-800/30 transition">

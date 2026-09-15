@@ -11,6 +11,7 @@ class TransactionBase(BaseModel):
     date: datetime
     is_manual: bool = True
     cost_type: Optional[str] = "variavel"
+    is_accounted: bool = True
 
 class TransactionCreate(TransactionBase):
     pass
@@ -20,6 +21,9 @@ class TransactionUpdateCategory(BaseModel):
 
 class TransactionUpdateCostType(BaseModel):
     cost_type: str
+
+class TransactionUpdateAccounted(BaseModel):
+    is_accounted: bool
 
 class TransactionResponse(TransactionBase):
     id: int

@@ -9,6 +9,7 @@ from app.schemas.transaction import (
     TransactionCreate, 
     TransactionUpdateCategory, 
     TransactionUpdateCostType,
+    TransactionUpdateAccounted,
     TransactionResponse,
     DashboardSummary
 )
@@ -80,7 +81,8 @@ def create_transaction(
         amount=tx_in.amount,
         date=tx_in.date,
         is_manual=True,
-        cost_type=c_type
+        cost_type=c_type,
+        is_accounted=tx_in.is_accounted if tx_in.is_accounted is not None else True
     )
     db.add(tx)
     account.balance = Decimal(str(account.balance)) + Decimal(str(tx_in.amount))
@@ -147,6 +149,32 @@ def update_transaction_cost_type(
     res.account_name = acc.name if acc else None
     return res
 
+@router.patch("/{transaction_id}/accounted", response_model=TransactionResponse)
+def update_transaction_accounted(
+    transaction_id: int,
+    payload: TransactionUpdateAccounted,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    tx = db.query(Transaction).join(Account).filter(
+        Transaction.id == transaction_id,
+        Account.user_id == current_user.id
+    ).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transação não encontrada.")
+
+    tx.is_accounted = payload.is_accounted
+    db.commit()
+    db.refresh(tx)
+
+    cat = db.query(Category).filter(Category.id == tx.category_id).first() if tx.category_id else None
+    acc = db.query(Account).filter(Account.id == tx.account_id).first()
+    res = TransactionResponse.model_validate(tx)
+    res.category_name = cat.name if cat else None
+    res.category_color = cat.color if cat else None
+    res.account_name = acc.name if acc else None
+    return res
+
 @router.get("/summary", response_model=DashboardSummary)
 def get_summary(
     days: int = Query(30, ge=7, le=365),
@@ -155,7 +183,7 @@ def get_summary(
 ):
     since_date = datetime.utcnow() - timedelta(days=days)
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
-        .filter(Account.user_id == current_user.id, Transaction.date >= since_date).all()
+        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True).all()
 
     total_income = Decimal("0.00")
     total_expense = Decimal("0.00")

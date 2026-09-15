@@ -76,7 +76,8 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
         date=tx_date,
         is_manual=False,
         pluggy_transaction_id=tx_id,
-        cost_type=c_type
+        cost_type=c_type,
+        is_accounted=True
     )
     db.add(new_tx)
     return True

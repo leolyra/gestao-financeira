@@ -59,6 +59,7 @@ interface Transaction {
   category_color?: string;
   account_name?: string;
   cost_type?: 'fixa' | 'variavel';
+  is_accounted?: boolean;
 }
 
 interface PortfolioPosition {
@@ -251,7 +252,11 @@ export default function Home() {
   const [newTxCategoryId, setNewTxCategoryId] = useState<number | ''>('');
   const [newTxDate, setNewTxDate] = useState(new Date().toISOString().split('T')[0]);
   const [newTxCostType, setNewTxCostType] = useState<'variavel' | 'fixa'>('variavel');
+  const [newTxIsAccounted, setNewTxIsAccounted] = useState<boolean>(true);
+  const [filterAccount, setFilterAccount] = useState<string>('all');
+  const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterCostType, setFilterCostType] = useState<'all' | 'fixa' | 'variavel'>('all');
+  const [filterAccounted, setFilterAccounted] = useState<'all' | 'yes' | 'no'>('all');
 
   // Pluggy Connect State
   const [isConnectingPluggy, setIsConnectingPluggy] = useState(false);
@@ -562,7 +567,8 @@ export default function Home() {
           amount: finalAmt,
           date: new Date(newTxDate).toISOString(),
           is_manual: true,
-          cost_type: newTxCostType
+          cost_type: newTxCostType,
+          is_accounted: newTxIsAccounted
         })
       });
 
@@ -600,6 +606,24 @@ export default function Home() {
       const res = await fetchWithAuth(`/transactions/${txId}/cost-type`, {
         method: 'PATCH',
         body: JSON.stringify({ cost_type: costType })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
+        const sumRes = await fetchWithAuth('/transactions/summary?days=90');
+        if (sumRes.ok) setSummary(await sumRes.json());
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleToggleAccounted(txId: number, currentVal: boolean) {
+    const newVal = !currentVal;
+    try {
+      const res = await fetchWithAuth(`/transactions/${txId}/accounted`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_accounted: newVal })
       });
       if (res.ok) {
         const updated = await res.json();
@@ -1277,7 +1301,7 @@ export default function Home() {
             <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
               <PlusCircle className="w-4 h-4 text-indigo-400" /> Registrar Novo Lançamento Manual
             </h2>
-            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3">
               <div className="lg:col-span-2">
                 <input
                   type="text"
@@ -1346,7 +1370,19 @@ export default function Home() {
                 </select>
               </div>
 
-              <div className="sm:col-span-2 lg:col-span-7 flex justify-end">
+              <div className="flex items-center gap-2 px-1">
+                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={newTxIsAccounted}
+                    onChange={(e) => setNewTxIsAccounted(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span>Contabilizar</span>
+                </label>
+              </div>
+
+              <div className="sm:col-span-2 lg:col-span-8 flex justify-end">
                 <button
                   type="submit"
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition"
@@ -1359,22 +1395,94 @@ export default function Home() {
 
           {/* Tabela de Lançamentos com Reclassificação Rápida */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div className="p-4 border-b border-slate-800 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
               <div>
                 <h3 className="text-sm font-semibold text-white">Extrato Consolidado de Transações</h3>
-                <span className="text-xs text-slate-400">{transactions.filter(t => filterCostType === 'all' || (t.cost_type || 'variavel') === filterCostType).length} de {transactions.length} registros</span>
+                <span className="text-xs text-slate-400">
+                  {transactions.filter(t => {
+                    if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+                    if (filterCategory !== 'all') {
+                      if (filterCategory === 'none' && t.category_id) return false;
+                      if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
+                    }
+                    if (filterCostType !== 'all' && (t.cost_type || 'variavel') !== filterCostType) return false;
+                    if (filterAccounted !== 'all') {
+                      const isAcc = t.is_accounted ?? true;
+                      if (filterAccounted === 'yes' && !isAcc) return false;
+                      if (filterAccounted === 'no' && isAcc) return false;
+                    }
+                    return true;
+                  }).length} de {transactions.length} registros exibidos
+                </span>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400">Filtrar:</span>
+
+              {/* Barra de Filtros Múltiplos: Conta, Categoria, Tipo e Contabilização */}
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                {/* Filtro por Conta */}
+                <select
+                  value={filterAccount}
+                  onChange={(e) => setFilterAccount(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Filtrar por Conta Bancária ou Cartão"
+                >
+                  <option value="all">Todas as Contas</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={String(a.id)}>{a.name}</option>
+                  ))}
+                </select>
+
+                {/* Filtro por Categoria */}
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Filtrar por Categoria"
+                >
+                  <option value="all">Todas as Categorias</option>
+                  <option value="none">Sem Categoria</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={String(c.id)}>{c.name}</option>
+                  ))}
+                </select>
+
+                {/* Filtro por Tipo de Custo */}
                 <select
                   value={filterCostType}
                   onChange={(e) => setFilterCostType(e.target.value as any)}
-                  className="px-2.5 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Filtrar por Fixa / Variável"
                 >
-                  <option value="all">Todas as transações</option>
+                  <option value="all">Fixas e Variáveis</option>
                   <option value="fixa">Apenas Fixas</option>
                   <option value="variavel">Apenas Variáveis</option>
                 </select>
+
+                {/* Filtro por Contabilização */}
+                <select
+                  value={filterAccounted}
+                  onChange={(e) => setFilterAccounted(e.target.value as any)}
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Filtrar por inclusão no Dashboard"
+                >
+                  <option value="all">Todos os Lançamentos</option>
+                  <option value="yes">Apenas Contabilizados</option>
+                  <option value="no">Apenas Ignorados</option>
+                </select>
+
+                {(filterAccount !== 'all' || filterCategory !== 'all' || filterCostType !== 'all' || filterAccounted !== 'all') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterAccount('all');
+                      setFilterCategory('all');
+                      setFilterCostType('all');
+                      setFilterAccounted('all');
+                    }}
+                    className="px-2 py-1 text-[11px] text-rose-400 hover:text-rose-300 hover:underline transition"
+                  >
+                    Limpar Filtros
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1387,23 +1495,43 @@ export default function Home() {
                     <th className="py-3 px-4">Conta</th>
                     <th className="py-3 px-4">Categoria</th>
                     <th className="py-3 px-4">Tipo</th>
+                    <th className="py-3 px-4 text-center" title="Se ativado, entra nos totais do Dashboard">Contabilizar</th>
                     <th className="py-3 px-4 text-right">Valor</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
-                  {transactions.filter(t => filterCostType === "all" || (t.cost_type || "variavel") === filterCostType).map((tx) => {
+                  {transactions.filter(t => {
+                    if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+                    if (filterCategory !== 'all') {
+                      if (filterCategory === 'none' && t.category_id) return false;
+                      if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
+                    }
+                    if (filterCostType !== 'all' && (t.cost_type || 'variavel') !== filterCostType) return false;
+                    if (filterAccounted !== 'all') {
+                      const isAcc = t.is_accounted ?? true;
+                      if (filterAccounted === 'yes' && !isAcc) return false;
+                      if (filterAccounted === 'no' && isAcc) return false;
+                    }
+                    return true;
+                  }).map((tx) => {
                     const isIncome = Number(tx.amount) > 0;
+                    const isAcc = tx.is_accounted ?? true;
                     return (
-                      <tr key={tx.id} className="hover:bg-slate-800/30 transition">
+                      <tr key={tx.id} className={`hover:bg-slate-800/30 transition ${!isAcc ? 'opacity-60 bg-slate-950/40' : ''}`}>
                         <td className="py-3 px-4 text-xs whitespace-nowrap text-slate-400">
                           {new Date(tx.date).toLocaleDateString('pt-BR')}
                         </td>
-                        <td className="py-3 px-4 font-medium text-white">
+                        <td className={`py-3 px-4 font-medium ${!isAcc ? 'text-slate-400' : 'text-white'}`}>
                           <div className="flex items-center gap-2">
-                            <span>{tx.description}</span>
+                            <span className={!isAcc ? 'line-through opacity-80' : ''}>{tx.description}</span>
                             {!tx.is_manual && (
                               <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 text-[10px] rounded border border-emerald-500/20">
                                 Open Finance
+                              </span>
+                            )}
+                            {!isAcc && (
+                              <span className="px-1.5 py-0.5 bg-slate-800 text-slate-400 text-[10px] rounded border border-slate-700">
+                                Ignorado
                               </span>
                             )}
                           </div>
@@ -1437,6 +1565,24 @@ export default function Home() {
                             <option value="fixa">Fixa</option>
                           </select>
                         </td>
+                        <td className="py-3 px-4 text-center whitespace-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleAccounted(tx.id, tx.is_accounted ?? true)}
+                            title={(tx.is_accounted ?? true) ? "Contabilizado no Dashboard (clique para ignorar)" : "Ignorado no Dashboard (clique para contabilizar)"}
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition shadow-sm ${
+                              (tx.is_accounted ?? true)
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                                : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                            }`}
+                          >
+                            {(tx.is_accounted ?? true) ? (
+                              <><CheckCircle className="w-3.5 h-3.5" /> <span>Sim</span></>
+                            ) : (
+                              <><span className="text-[10px] font-bold">✕</span> <span>Não</span></>
+                            )}
+                          </button>
+                        </td>
                         <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {isIncome ? '+' : ''} R$ {Number(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </td>
@@ -1445,7 +1591,7 @@ export default function Home() {
                   })}
                   {transactions.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-xs text-slate-500">
+                      <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
                         Nenhum lançamento registrado. Conecte seu banco via Open Finance ou insira lançamentos manuais acima.
                       </td>
                     </tr>
@@ -1843,7 +1989,7 @@ export default function Home() {
               </p>
             </div>
 
-            <form onSubmit={handleCalculateSwap} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+            <form onSubmit={handleCalculateSwap} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3">
               <input
                 type="text"
                 placeholder="Ativo Origem (ex: HGLG11)"
@@ -1907,7 +2053,7 @@ export default function Home() {
                   required
                 />
               </div>
-              <div className="sm:col-span-2 lg:col-span-7 flex justify-end">
+              <div className="sm:col-span-2 lg:col-span-8 flex justify-end">
                 <button
                   type="submit"
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition"

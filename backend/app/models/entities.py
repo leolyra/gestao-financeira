@@ -39,6 +39,7 @@ class Transaction(Base):
     is_manual = Column(Boolean, default=False)
     pluggy_transaction_id = Column(String(100), nullable=True)
     cost_type = Column(String(20), default="variavel", nullable=False) # fixa, variavel
+    is_accounted = Column(Boolean, default=True, nullable=False)
 
 class Asset(Base):
     __tablename__ = "assets"

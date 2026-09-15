@@ -1,12 +1,13 @@
-from typing import List
+from typing import List, Optional
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.core.database import get_db
 from app.models.entities import Category, Transaction, Account, User
 from app.schemas.category import CategoryCreate, CategoryResponse
 from app.api.deps import get_current_user
+from app.services.date_utils import resolve_date_range
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -23,6 +24,7 @@ DEFAULT_CATEGORIES = [
 
 @router.get("/", response_model=List[CategoryResponse])
 def list_categories(
+    period: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -36,13 +38,22 @@ def list_categories(
         or_(Category.user_id == current_user.id, Category.user_id == None)
     ).order_by(Category.name.asc()).all()
 
-    # Busca créditos (entradas) e débitos (saídas) de transações contabilizadas
-    user_txs = db.query(
+    p_start, p_end = resolve_date_range(period)
+
+    tx_query = db.query(
         Transaction.category_id,
         Transaction.amount
-    ).join(Account, Transaction.account_id == Account.id)\
-     .filter(Account.user_id == current_user.id, Transaction.is_accounted == True)\
-     .all()
+    ).join(Account, Transaction.account_id == Account.id).filter(
+        Account.user_id == current_user.id,
+        Transaction.is_accounted.is_(True)
+    )
+
+    if p_start:
+        tx_query = tx_query.filter(Transaction.date >= p_start)
+    if p_end:
+        tx_query = tx_query.filter(Transaction.date <= p_end)
+
+    user_txs = tx_query.all()
 
     cat_stats = {}
     for cat_id, amt in user_txs:
@@ -60,7 +71,7 @@ def list_categories(
         stats = cat_stats.get(cat.id, {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
         inc = float(stats["income"])
         exp = float(stats["expense"])
-        bal = inc - exp  # saldo = diferença entre créditos e débitos
+        bal = inc - exp
 
         results.append(CategoryResponse(
             id=cat.id,

@@ -33,6 +33,22 @@ import {
 } from 'lucide-react';
 import { fetchWithAuth, setToken, getToken, removeToken } from '@/lib/api';
 
+const PERIOD_OPTIONS = [
+  { label: 'Mês atual', value: 'current_month' },
+  { label: '30 dias', value: '30d' },
+  { label: 'Mês anterior', value: 'previous_month' },
+  { label: '60 dias', value: '60d' },
+  { label: '90 dias', value: '90d' },
+  { label: 'Esse ano', value: 'current_year' },
+  { label: 'Últimos 12 meses', value: '12m' },
+  { label: 'Todo o Histórico', value: 'all' },
+];
+
+function getPeriodLabel(val: string): string {
+  const found = PERIOD_OPTIONS.find((p) => p.value === val);
+  return found ? found.label : val;
+}
+
 interface Account {
   id: number;
   name: string;
@@ -268,7 +284,9 @@ export default function Home() {
   const [isExportingXlsx, setIsExportingXlsx] = useState<boolean>(false);
 
   // Dashboard Days & Historical Evolution State
-  const [dashboardDays, setDashboardDays] = useState<number>(90);
+  const [dashboardPeriod, setDashboardPeriod] = useState<string>('90d');
+  const [categoryPeriod, setCategoryPeriod] = useState<string>('all');
+  const [isLoadingCategories, setIsLoadingCategories] = useState<boolean>(false);
   const [historicalMonths, setHistoricalMonths] = useState<number>(12);
   const [historicalData, setHistoricalData] = useState<any>(null);
   const [isLoadingHistorical, setIsLoadingHistorical] = useState<boolean>(false);
@@ -294,9 +312,9 @@ export default function Home() {
       const [meRes, accRes, catRes, txRes, sumRes, portRes, invTxRes, invSumRes] = await Promise.all([
         fetchWithAuth('/auth/me'),
         fetchWithAuth('/accounts/'),
-        fetchWithAuth('/categories/'),
+        fetchWithAuth(`/categories/?period=${categoryPeriod}`),
         fetchWithAuth('/transactions/'),
-        fetchWithAuth(`/transactions/summary?days=${dashboardDays}`),
+        fetchWithAuth(`/transactions/summary?period=${dashboardPeriod}`),
         fetchWithAuth('/investments/portfolio'),
         fetchWithAuth('/investments/transactions'),
         fetchWithAuth('/investments/summary')
@@ -625,8 +643,10 @@ export default function Home() {
       if (res.ok) {
         const updated = await res.json();
         setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
-        const sumRes = await fetchWithAuth(`/transactions/summary?days=${dashboardDays}`);
+        const sumRes = await fetchWithAuth(`/transactions/summary?period=${dashboardPeriod}`);
         if (sumRes.ok) setSummary(await sumRes.json());
+        const catRes = await fetchWithAuth(`/categories/?period=${categoryPeriod}`);
+        if (catRes.ok) setCategories(await catRes.json());
       } else {
         const err = await res.json().catch(() => ({}));
         alert(`Aviso: O backend não conseguiu salvar o tipo de custo. Detalhes: ${err.detail || res.statusText}`);
@@ -718,13 +738,26 @@ export default function Home() {
     }
   }
 
-  async function handleDashboardDaysChange(days: number) {
-    setDashboardDays(days);
+  async function handleDashboardPeriodChange(period: string) {
+    setDashboardPeriod(period);
     try {
-      const sumRes = await fetchWithAuth(`/transactions/summary?days=${days}`);
+      const sumRes = await fetchWithAuth(`/transactions/summary?period=${period}`);
       if (sumRes.ok) setSummary(await sumRes.json());
     } catch (e) {
       console.error('Erro ao alterar período do dashboard:', e);
+    }
+  }
+
+  async function handleCategoryPeriodChange(period: string) {
+    setCategoryPeriod(period);
+    setIsLoadingCategories(true);
+    try {
+      const catRes = await fetchWithAuth(`/categories/?period=${period}`);
+      if (catRes.ok) setCategories(await catRes.json());
+    } catch (e) {
+      console.error('Erro ao filtrar categorias por período:', e);
+    } finally {
+      setIsLoadingCategories(false);
     }
   }
 
@@ -752,8 +785,10 @@ export default function Home() {
       if (res.ok) {
         const updated = await res.json();
         setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
-        const sumRes = await fetchWithAuth(`/transactions/summary?days=${dashboardDays}`);
+        const sumRes = await fetchWithAuth(`/transactions/summary?period=${dashboardPeriod}`);
         if (sumRes.ok) setSummary(await sumRes.json());
+        const catRes = await fetchWithAuth(`/categories/?period=${categoryPeriod}`);
+        if (catRes.ok) setCategories(await catRes.json());
       } else {
         const err = await res.json().catch(() => ({}));
         alert(`Aviso: O backend não conseguiu atualizar a contabilização. Detalhes: ${err.detail || res.statusText}. Verifique se o container api foi atualizado.`);
@@ -1216,20 +1251,13 @@ export default function Home() {
               <Calendar className="w-4 h-4 text-indigo-400" />
               <span className="text-xs font-semibold text-slate-300 mr-1">Período dos Indicadores:</span>
               <div className="flex flex-wrap gap-1.5">
-                {[
-                  { label: '30 dias', value: 30 },
-                  { label: '60 dias', value: 60 },
-                  { label: '90 dias', value: 90 },
-                  { label: '6 meses', value: 180 },
-                  { label: '1 ano', value: 365 },
-                  { label: 'Todo o Histórico', value: 3650 }
-                ].map((p) => (
+                {PERIOD_OPTIONS.map((p) => (
                   <button
                     key={p.value}
                     type="button"
-                    onClick={() => handleDashboardDaysChange(p.value)}
+                    onClick={() => handleDashboardPeriodChange(p.value)}
                     className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
-                      dashboardDays === p.value
+                      dashboardPeriod === p.value
                         ? 'bg-indigo-600 text-white shadow'
                         : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
                     }`}
@@ -1283,7 +1311,7 @@ export default function Home() {
 
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium uppercase tracking-wider">Receitas ({dashboardDays >= 3650 ? 'Tudo' : `${dashboardDays}d`})</span>
+                <span className="text-xs font-medium uppercase tracking-wider">Receitas ({getPeriodLabel(dashboardPeriod)})</span>
                 <ArrowUpRight className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="mt-3">
@@ -1296,7 +1324,7 @@ export default function Home() {
 
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium uppercase tracking-wider">Despesas ({dashboardDays >= 3650 ? 'Tudo' : `${dashboardDays}d`})</span>
+                <span className="text-xs font-medium uppercase tracking-wider">Despesas ({getPeriodLabel(dashboardPeriod)})</span>
                 <ArrowDownRight className="w-4 h-4 text-rose-400" />
               </div>
               <div className="mt-3">
@@ -1315,7 +1343,7 @@ export default function Home() {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="text-sm font-semibold text-white flex items-center gap-2">
-                    <PieChart className="w-4 h-4 text-purple-400" /> Fixas vs. Variáveis ({dashboardDays >= 3650 ? 'Todo o Histórico' : `Últimos ${dashboardDays} dias`})
+                    <PieChart className="w-4 h-4 text-purple-400" /> Fixas vs. Variáveis ({getPeriodLabel(dashboardPeriod)})
                   </h3>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-300 border border-purple-500/20 font-medium">
                     Estrutura de Custos
@@ -1400,7 +1428,7 @@ export default function Home() {
             {/* Distribuição por Categoria */}
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                <Tag className="w-4 h-4 text-indigo-400" /> Composição de Gastos por Categoria ({dashboardDays >= 3650 ? 'Todo o Histórico' : `Últimos ${dashboardDays} dias`})
+                <Tag className="w-4 h-4 text-indigo-400" /> Composição de Gastos por Categoria ({getPeriodLabel(dashboardPeriod)})
               </h3>
               <div className="space-y-3">
                 {summary?.expenses_by_category.map((cat) => {
@@ -1886,21 +1914,16 @@ export default function Home() {
 
               {/* Barra de Filtros Múltiplos: Período, Conta, Categoria, Tipo e Contabilização */}
               <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
-                {/* Filtro por Período */}
+                {/* Filtro por Período Padronizado */}
                 <select
                   value={filterPeriod}
                   onChange={(e) => setFilterPeriod(e.target.value)}
                   className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
-                  title="Filtrar por Período de Datas"
+                  title="Filtrar por Período Padronizado"
                 >
-                  <option value="all">Todo o Histórico</option>
-                  <option value="current_month">Mês Atual</option>
-                  <option value="30d">Últimos 30 dias</option>
-                  <option value="previous_month">Mês Anterior</option>
-                  <option value="60d">Últimos 60 dias</option>
-                  <option value="90d">Últimos 90 dias</option>
-                  <option value="current_year">Este Ano</option>
-                  <option value="12m">Últimos 12 meses</option>
+                  {PERIOD_OPTIONS.map((p) => (
+                    <option key={p.value} value={p.value}>{p.label}</option>
+                  ))}
                 </select>
 
                 {/* Filtro por Conta */}
@@ -2751,6 +2774,32 @@ export default function Home() {
       {/* ABA 4: CATEGORIAS */}
       {activeTab === 'categories' && (
         <section className="mt-6 space-y-6">
+          {/* Barra de Filtro por Período para Categorias */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Calendar className="w-4 h-4 text-indigo-400" />
+              <span className="text-xs font-semibold text-slate-300 mr-1">Período de Análise das Categorias:</span>
+              <div className="flex flex-wrap gap-1.5">
+                {PERIOD_OPTIONS.map((p) => (
+                  <button
+                    key={p.value}
+                    type="button"
+                    onClick={() => handleCategoryPeriodChange(p.value)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium transition ${
+                      categoryPeriod === p.value
+                        ? 'bg-indigo-600 text-white shadow'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <span className="text-xs text-slate-400">
+              Saldos do período: <strong className="text-indigo-300">{getPeriodLabel(categoryPeriod)}</strong>
+            </span>
+          </div>
           <div className="bg-slate-900 border border-slate-800 p-5 rounded-xl">
             <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
               <PlusCircle className="w-4 h-4 text-indigo-400" /> Nova Categoria Personalizada

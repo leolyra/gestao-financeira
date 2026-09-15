@@ -1,3 +1,4 @@
+from app.services.date_utils import resolve_date_range
 from io import BytesIO
 from fastapi.responses import StreamingResponse
 import openpyxl
@@ -214,16 +215,31 @@ def update_transaction_accounted(
 
 @router.get("/summary", response_model=DashboardSummary)
 def get_summary(
-    days: int = Query(90, ge=7, le=3650),
+    period: Optional[str] = Query(None),
+    days: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    if days >= 3650:
-        since_date = datetime(2000, 1, 1)
+    p_start, p_end = None, None
+    if period:
+        p_start, p_end = resolve_date_range(period)
+    elif days:
+        if days >= 3650:
+            p_start = None
+        else:
+            p_start = datetime.utcnow() - timedelta(days=days)
     else:
-        since_date = datetime.utcnow() - timedelta(days=days)
-    transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
-        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted.is_(True)).all()
+        p_start = datetime.utcnow() - timedelta(days=90)
+
+    tx_query = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
+        .filter(Account.user_id == current_user.id, Transaction.is_accounted.is_(True))
+
+    if p_start:
+        tx_query = tx_query.filter(Transaction.date >= p_start)
+    if p_end:
+        tx_query = tx_query.filter(Transaction.date <= p_end)
+
+    transactions = tx_query.all()
 
     total_income = Decimal("0.00")
     total_expense = Decimal("0.00")

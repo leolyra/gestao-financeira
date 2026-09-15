@@ -7,7 +7,7 @@ from app.core.database import get_db
 from app.models.entities import Category, Transaction, Account, User
 from app.schemas.category import CategoryCreate, CategoryResponse
 from app.api.deps import get_current_user
-from app.services.date_utils import resolve_date_range
+from app.services.categorizer import resolve_date_range
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 

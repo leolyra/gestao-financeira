@@ -48,3 +48,39 @@ def detect_cost_type(description: str) -> str:
     if any(kw in desc_lower for kw in FIXED_EXPENSE_KEYWORDS):
         return "fixa"
     return "variavel"
+
+from datetime import datetime, timedelta
+from typing import Tuple
+
+def resolve_date_range(period: Optional[str]) -> Tuple[Optional[datetime], Optional[datetime]]:
+    if not period:
+        return None, None
+    now = datetime.utcnow()
+    p = period.lower().strip()
+
+    if p in ["current_month", "mes_atual", "mês atual"]:
+        start = datetime(now.year, now.month, 1, 0, 0, 0)
+        return start, None
+    elif p in ["30d", "30 dias", "30_dias"]:
+        start = now - timedelta(days=30)
+        return start, None
+    elif p in ["previous_month", "mes_anterior", "mês anterior"]:
+        first_this_month = datetime(now.year, now.month, 1, 0, 0, 0)
+        last_prev_month = first_this_month - timedelta(seconds=1)
+        first_prev_month = datetime(last_prev_month.year, last_prev_month.month, 1, 0, 0, 0)
+        return first_prev_month, last_prev_month
+    elif p in ["60d", "60 dias", "60_dias"]:
+        start = now - timedelta(days=60)
+        return start, None
+    elif p in ["90d", "90 dias", "90_dias"]:
+        start = now - timedelta(days=90)
+        return start, None
+    elif p in ["current_year", "esse_ano", "este_ano", "esse ano", "este ano"]:
+        start = datetime(now.year, 1, 1, 0, 0, 0)
+        return start, None
+    elif p in ["12m", "12 meses", "12_meses", "ultimos_12_meses", "365d"]:
+        start = now - timedelta(days=365)
+        return start, None
+    elif p in ["all", "tudo", "todo_historico"]:
+        return None, None
+    return None, None

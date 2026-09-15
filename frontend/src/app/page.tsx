@@ -705,7 +705,12 @@ export default function Home() {
         setPluggyStatusMsg(`Aviso: ${data.detail || "Erro ao buscar conexões"}`);
         return;
       }
-      setPluggyStatusMsg(`Sincronização concluída! ${data.items_count} instituição(ões) encontrada(s), ${data.accounts_synced} novas contas e ${data.transactions_synced} transações importadas.`);
+      if (data.notice) {
+        setPluggyStatusMsg(data.notice);
+      } else {
+        const invMsg = data.investments_synced ? `, ${data.investments_synced} posições de investimento` : "";
+        setPluggyStatusMsg(`Sincronização concluída! ${data.items_count} instituição(ões), ${data.accounts_synced} contas, ${data.transactions_synced} transações${invMsg} importadas.`);
+      }
       loadAllData();
     } catch (err: any) {
       setPluggyStatusMsg("Erro ao sincronizar dados: " + err.message);
@@ -756,7 +761,11 @@ export default function Home() {
             body: JSON.stringify({ itemId: itemData.item.id })
           });
           const syncData = await syncRes.json();
-          setPluggyStatusMsg(`Sincronização concluída! ${syncData.transactions_synced} lançamentos importados.`);
+          if (syncData.notice) {
+            setPluggyStatusMsg(syncData.notice);
+          } else {
+            setPluggyStatusMsg(`Sincronização concluída! ${syncData.transactions_synced} lançamentos importados.`);
+          }
           loadAllData();
         } catch (e: any) {
           setPluggyStatusMsg('Erro na sincronização: ' + e.message);

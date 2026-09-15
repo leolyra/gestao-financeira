@@ -242,6 +242,11 @@ export default function Home() {
   const [customItemId, setCustomItemId] = useState('');
   const [showItemInput, setShowItemInput] = useState(false);
 
+  // Diagnostics State
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
+  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
+  const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
+
   useEffect(() => {
     const savedToken = getToken();
     if (savedToken) {
@@ -695,6 +700,24 @@ export default function Home() {
   }
 
   // Sincronizar conexões já existentes no Pluggy
+  async function handleOpenDiagnostics() {
+    setIsLoadingDiagnostics(true);
+    setShowDiagnosticsModal(true);
+    try {
+      const res = await fetchWithAuth('/open-finance/diagnostics');
+      if (res.ok) {
+        const data = await res.json();
+        setDiagnosticsData(data);
+      } else {
+        alert('Erro ao carregar diagnóstico: ' + res.statusText);
+      }
+    } catch (err: any) {
+      alert('Falha na comunicação: ' + err.message);
+    } finally {
+      setIsLoadingDiagnostics(false);
+    }
+  }
+
   async function handleSyncAllExisting() {
     setIsConnectingPluggy(true);
     setPluggyStatusMsg("Buscando todas as contas já autorizadas na Pluggy...");
@@ -889,6 +912,13 @@ export default function Home() {
             title="Sincronizar todas as contas bancárias já autorizadas no Open Finance"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isConnectingPluggy ? "animate-spin" : ""}`} /> Sincronizar Contas Cadastradas
+          </button>
+          <button
+            onClick={handleOpenDiagnostics}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium shadow-sm transition"
+            title="Diagnóstico detalhado das permissões e retornos da Pluggy"
+          >
+            <Bot className="w-3.5 h-3.5" /> Diagnóstico das Conexões
           </button>
           <button
             onClick={() => setShowItemInput(!showItemInput)}

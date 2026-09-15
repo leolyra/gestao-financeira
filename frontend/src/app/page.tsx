@@ -43,8 +43,13 @@ interface Account {
 interface Category {
   id: number;
   name: string;
-  type: string;
-  color: string;
+  type?: string;
+  color?: string;
+  user_id?: number | null;
+  total_income?: number;
+  total_expense?: number;
+  balance?: number;
+  transactions_count?: number;
 }
 
 interface Transaction {
@@ -243,7 +248,7 @@ export default function Home() {
   const [newAccBalance, setNewAccBalance] = useState('');
 
   const [newCatName, setNewCatName] = useState('');
-  const [newCatType, setNewCatType] = useState('expense');
+  const [newCatType, setNewCatType] = useState('both');
   const [newCatColor, setNewCatColor] = useState('#3b82f6');
 
   const [newTxDesc, setNewTxDesc] = useState('');
@@ -2648,8 +2653,9 @@ export default function Home() {
                 onChange={(e) => setNewCatType(e.target.value)}
                 className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
               >
-                <option value="expense">Despesa</option>
-                <option value="income">Receita</option>
+                <option value="both">Mista (Receitas & Despesas)</option>
+                <option value="expense">Predominante Despesa</option>
+                <option value="income">Predominante Receita</option>
               </select>
               <div className="flex gap-2 items-center">
                 <input
@@ -2668,32 +2674,128 @@ export default function Home() {
             </form>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {categories.map((cat) => (
-              <div
-                key={cat.id}
-                className="p-3 bg-slate-900 border border-slate-800 rounded-xl flex justify-between items-center"
-              >
-                <div className="flex items-center gap-2.5">
-                  <span
-                    className="w-3 h-3 rounded-full"
-                    style={{ backgroundColor: cat.color || '#3b82f6' }}
-                  />
+          {/* Indicadores Globais das Categorias */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl">
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-400 block">Total de Categorias</span>
+              <span className="text-2xl font-bold text-white mt-1 block">{categories.length}</span>
+              <span className="text-[11px] text-slate-500">Categorias ativas no sistema</span>
+            </div>
+            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl">
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-400 block">Categorias com Saldo Credor</span>
+              <span className="text-2xl font-bold text-emerald-400 mt-1 block">
+                {categories.filter(c => (c.balance || 0) > 0).length}
+              </span>
+              <span className="text-[11px] text-slate-500">Mais entradas que saídas</span>
+            </div>
+            <div className="p-4 bg-slate-900 border border-slate-800 rounded-xl">
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-400 block">Categorias com Saldo Devedor</span>
+              <span className="text-2xl font-bold text-rose-400 mt-1 block">
+                {categories.filter(c => (c.balance || 0) < 0).length}
+              </span>
+              <span className="text-[11px] text-slate-500">Mais saídas que entradas</span>
+            </div>
+          </div>
+
+          {/* Grid de Cards Ricos com Saldo de Cada Categoria */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {categories.map((cat) => {
+              const bal = cat.balance || 0;
+              const inc = cat.total_income || 0;
+              const exp = cat.total_expense || 0;
+              const totFlow = inc + exp;
+              return (
+                <div
+                  key={cat.id}
+                  className="p-4 bg-slate-900 border border-slate-800 rounded-xl flex flex-col justify-between hover:border-slate-700/80 transition shadow-sm"
+                >
                   <div>
-                    <p className="text-sm font-medium text-white">{cat.name}</p>
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider">
-                      {cat.type === 'expense' ? 'Despesa' : 'Receita'}
-                    </span>
+                    {/* Header do Card */}
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex items-center gap-2.5">
+                        <span
+                          className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+                          style={{ backgroundColor: cat.color || '#3b82f6' }}
+                        />
+                        <div>
+                          <h3 className="text-sm font-semibold text-white tracking-tight">{cat.name}</h3>
+                          <span className="text-[10px] text-slate-400">
+                            {cat.transactions_count || 0} lançamento(s)
+                          </span>
+                        </div>
+                      </div>
+
+                      {cat.user_id !== null && (
+                        <button
+                          onClick={() => handleDeleteCategory(cat.id)}
+                          title="Excluir categoria personalizada"
+                          className="p-1 text-slate-500 hover:text-rose-400 rounded transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Saldo Líquido da Categoria */}
+                    <div className="my-3 p-3 bg-slate-800/40 border border-slate-800 rounded-lg">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-400 font-medium">Saldo Líquido</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                          bal > 0 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                          bal < 0 ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' :
+                          'bg-slate-800 text-slate-400'
+                        }`}>
+                          {bal > 0 ? 'Crédito Líquido' : bal < 0 ? 'Débito Líquido' : 'Neutro'}
+                        </span>
+                      </div>
+                      <div className={`text-xl font-bold font-mono mt-1 ${
+                        bal > 0 ? 'text-emerald-400' :
+                        bal < 0 ? 'text-rose-400' :
+                        'text-slate-300'
+                      }`}>
+                        {bal > 0 ? '+' : ''} R$ {bal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+
+                    {/* Detalhamento de Entradas vs Saídas */}
+                    <div className="space-y-1.5 text-xs">
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-emerald-400 font-medium flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Entradas (Créditos)
+                        </span>
+                        <span className="font-mono text-emerald-400 font-semibold">
+                          + R$ {inc.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-rose-400 font-medium flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span> Saídas (Débitos)
+                        </span>
+                        <span className="font-mono text-rose-400 font-semibold">
+                          - R$ {exp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      {/* Barra Proporcional interna da categoria */}
+                      {totFlow > 0 && (
+                        <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden flex mt-2">
+                          <div
+                            className="bg-emerald-500 h-full transition-all duration-500"
+                            style={{ width: `${(inc / totFlow) * 100}%` }}
+                            title={`Créditos: R$ ${inc.toFixed(2)}`}
+                          />
+                          <div
+                            className="bg-rose-500 h-full transition-all duration-500"
+                            style={{ width: `${(exp / totFlow) * 100}%` }}
+                            title={`Débitos: R$ ${exp.toFixed(2)}`}
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <button
-                  onClick={() => handleDeleteCategory(cat.id)}
-                  className="p-1 text-slate-500 hover:text-rose-400 transition"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       )}

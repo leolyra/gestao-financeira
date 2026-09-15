@@ -206,9 +206,14 @@ def get_summary(
         if month_key not in monthly_trend_dict:
             monthly_trend_dict[month_key] = {"month": month_key, "income": Decimal("0"), "expense": Decimal("0"), "fixed_expense": Decimal("0"), "variable_expense": Decimal("0")}
 
+        c_name = cat_name or "Sem Categoria"
+        if c_name not in cat_totals:
+            cat_totals[c_name] = {"name": c_name, "income": Decimal("0.00"), "expense": Decimal("0.00"), "color": cat_color or "#94a3b8"}
+
         if amt > 0:
             total_income += amt
             monthly_trend_dict[month_key]["income"] += amt
+            cat_totals[c_name]["income"] += amt
             if "fix" in c_type:
                 fixed_income += amt
             else:
@@ -217,17 +222,13 @@ def get_summary(
             abs_amt = abs(amt)
             total_expense += abs_amt
             monthly_trend_dict[month_key]["expense"] += abs_amt
+            cat_totals[c_name]["expense"] += abs_amt
             if "fix" in c_type:
                 fixed_expense += abs_amt
                 monthly_trend_dict[month_key]["fixed_expense"] += abs_amt
             else:
                 variable_expense += abs_amt
                 monthly_trend_dict[month_key]["variable_expense"] += abs_amt
-
-            c_name = cat_name or "Sem Categoria"
-            if c_name not in cat_totals:
-                cat_totals[c_name] = {"name": c_name, "value": Decimal("0"), "color": cat_color or "#94a3b8"}
-            cat_totals[c_name]["value"] += abs_amt
 
     tot_exp = fixed_expense + variable_expense
     fixed_exp_pct = float(round((fixed_expense / tot_exp * 100), 1)) if tot_exp > 0 else 0.0
@@ -248,11 +249,25 @@ def get_summary(
         "variable_income_pct": var_inc_pct
     }
 
+    expenses_by_cat = []
+    for c_name, c_data in cat_totals.items():
+        if c_data["expense"] > 0:
+            # Saldo de despesas compensado com eventuais creditos/estornos da categoria
+            net_expense = max(c_data["expense"] - c_data["income"], Decimal("0.00"))
+            expenses_by_cat.append({
+                "name": c_name,
+                "value": float(net_expense),
+                "gross_expense": float(c_data["expense"]),
+                "credits": float(c_data["income"]),
+                "balance": float(c_data["income"] - c_data["expense"]),
+                "color": c_data["color"]
+            })
+
     return DashboardSummary(
         total_income=total_income,
         total_expense=total_expense,
         net_total=total_income - total_expense,
-        expenses_by_category=sorted(list(cat_totals.values()), key=lambda x: x["value"], reverse=True),
+        expenses_by_category=sorted(expenses_by_cat, key=lambda x: x["value"], reverse=True),
         monthly_trend=sorted(list(monthly_trend_dict.values()), key=lambda x: x["month"]),
         cost_type_summary=cost_type_summary
     )

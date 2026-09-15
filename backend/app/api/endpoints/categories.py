@@ -1,23 +1,24 @@
 from typing import List
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from app.core.database import get_db
-from app.models.entities import Category, User
+from app.models.entities import Category, Transaction, Account, User
 from app.schemas.category import CategoryCreate, CategoryResponse
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
 DEFAULT_CATEGORIES = [
-    {"name": "Alimentação / Supermercado", "type": "expense", "color": "#f97316"},
-    {"name": "Moradia / Contas", "type": "expense", "color": "#ef4444"},
-    {"name": "Transporte / Combustível", "type": "expense", "color": "#eab308"},
-    {"name": "Saúde & Treinos", "type": "expense", "color": "#10b981"},
-    {"name": "Lazer & Família", "type": "expense", "color": "#ec4899"},
-    {"name": "Salário / Remuneração", "type": "income", "color": "#22c55e"},
-    {"name": "Proventos / Dividendos", "type": "income", "color": "#3b82f6"},
-    {"name": "Rendimentos / Outros", "type": "income", "color": "#8b5cf6"},
+    {"name": "Alimentação / Supermercado", "type": "both", "color": "#f97316"},
+    {"name": "Moradia / Contas", "type": "both", "color": "#ef4444"},
+    {"name": "Transporte / Combustível", "type": "both", "color": "#eab308"},
+    {"name": "Saúde & Treinos", "type": "both", "color": "#10b981"},
+    {"name": "Lazer & Família", "type": "both", "color": "#ec4899"},
+    {"name": "Salário / Remuneração", "type": "both", "color": "#22c55e"},
+    {"name": "Proventos / Dividendos", "type": "both", "color": "#3b82f6"},
+    {"name": "Rendimentos / Outros", "type": "both", "color": "#8b5cf6"},
 ]
 
 @router.get("/", response_model=List[CategoryResponse])
@@ -31,9 +32,49 @@ def list_categories(
             db.add(Category(**cat_data, user_id=None))
         db.commit()
 
-    return db.query(Category).filter(
+    categories = db.query(Category).filter(
         or_(Category.user_id == current_user.id, Category.user_id == None)
-    ).all()
+    ).order_by(Category.name.asc()).all()
+
+    # Busca créditos (entradas) e débitos (saídas) de transações contabilizadas
+    user_txs = db.query(
+        Transaction.category_id,
+        Transaction.amount
+    ).join(Account, Transaction.account_id == Account.id)\
+     .filter(Account.user_id == current_user.id, Transaction.is_accounted == True)\
+     .all()
+
+    cat_stats = {}
+    for cat_id, amt in user_txs:
+        if cat_id not in cat_stats:
+            cat_stats[cat_id] = {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0}
+        amt_dec = Decimal(str(amt))
+        cat_stats[cat_id]["count"] += 1
+        if amt_dec > 0:
+            cat_stats[cat_id]["income"] += amt_dec
+        else:
+            cat_stats[cat_id]["expense"] += abs(amt_dec)
+
+    results = []
+    for cat in categories:
+        stats = cat_stats.get(cat.id, {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
+        inc = float(stats["income"])
+        exp = float(stats["expense"])
+        bal = inc - exp  # saldo = diferença entre créditos e débitos
+
+        results.append(CategoryResponse(
+            id=cat.id,
+            name=cat.name,
+            type=cat.type or "both",
+            color=cat.color or "#3b82f6",
+            user_id=cat.user_id,
+            total_income=inc,
+            total_expense=exp,
+            balance=bal,
+            transactions_count=stats["count"]
+        ))
+
+    return results
 
 @router.post("/", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 def create_category(
@@ -44,13 +85,23 @@ def create_category(
     cat = Category(
         user_id=current_user.id,
         name=category_in.name,
-        type=category_in.type,
-        color=category_in.color
+        type=category_in.type or "both",
+        color=category_in.color or "#3b82f6"
     )
     db.add(cat)
     db.commit()
     db.refresh(cat)
-    return cat
+    return CategoryResponse(
+        id=cat.id,
+        name=cat.name,
+        type=cat.type or "both",
+        color=cat.color or "#3b82f6",
+        user_id=cat.user_id,
+        total_income=0.0,
+        total_expense=0.0,
+        balance=0.0,
+        transactions_count=0
+    )
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_category(

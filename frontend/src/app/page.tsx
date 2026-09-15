@@ -617,11 +617,15 @@ export default function Home() {
       if (res.ok) {
         const updated = await res.json();
         setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
-        const sumRes = await fetchWithAuth('/transactions/summary?days=90');
+        const sumRes = await fetchWithAuth(`/transactions/summary?days=${dashboardDays}`);
         if (sumRes.ok) setSummary(await sumRes.json());
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Aviso: O backend não conseguiu salvar o tipo de custo. Detalhes: ${err.detail || res.statusText}`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert('Falha de conexão com a API: ' + err.message);
     }
   }
 
@@ -659,11 +663,15 @@ export default function Home() {
       if (res.ok) {
         const updated = await res.json();
         setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
-        const sumRes = await fetchWithAuth('/transactions/summary?days=90');
+        const sumRes = await fetchWithAuth(`/transactions/summary?days=${dashboardDays}`);
         if (sumRes.ok) setSummary(await sumRes.json());
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Aviso: O backend não conseguiu atualizar a contabilização. Detalhes: ${err.detail || res.statusText}. Verifique se o container api foi atualizado.`);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert('Falha de conexão com a API: ' + err.message);
     }
   }
 

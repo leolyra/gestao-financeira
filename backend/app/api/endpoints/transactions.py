@@ -177,11 +177,14 @@ def update_transaction_accounted(
 
 @router.get("/summary", response_model=DashboardSummary)
 def get_summary(
-    days: int = Query(30, ge=7, le=365),
+    days: int = Query(90, ge=7, le=3650),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    since_date = datetime.utcnow() - timedelta(days=days)
+    if days >= 3650:
+        since_date = datetime(2000, 1, 1)
+    else:
+        since_date = datetime.utcnow() - timedelta(days=days)
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
         .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True).all()
 
@@ -201,7 +204,7 @@ def get_summary(
         c_type = str(getattr(tx, "cost_type", None) or "variavel").lower()
 
         if month_key not in monthly_trend_dict:
-            monthly_trend_dict[month_key] = {"month": month_key, "income": Decimal("0"), "expense": Decimal("0")}
+            monthly_trend_dict[month_key] = {"month": month_key, "income": Decimal("0"), "expense": Decimal("0"), "fixed_expense": Decimal("0"), "variable_expense": Decimal("0")}
 
         if amt > 0:
             total_income += amt
@@ -216,8 +219,10 @@ def get_summary(
             monthly_trend_dict[month_key]["expense"] += abs_amt
             if "fix" in c_type:
                 fixed_expense += abs_amt
+                monthly_trend_dict[month_key]["fixed_expense"] += abs_amt
             else:
                 variable_expense += abs_amt
+                monthly_trend_dict[month_key]["variable_expense"] += abs_amt
 
             c_name = cat_name or "Sem Categoria"
             if c_name not in cat_totals:
@@ -251,3 +256,106 @@ def get_summary(
         monthly_trend=sorted(list(monthly_trend_dict.values()), key=lambda x: x["month"]),
         cost_type_summary=cost_type_summary
     )
+
+@router.get("/historical-evolution")
+def get_historical_evolution(
+    months: int = Query(12, ge=3, le=120),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if months >= 120:
+        since_date = datetime(2000, 1, 1)
+    else:
+        since_date = datetime.utcnow() - timedelta(days=months * 31)
+
+    transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
+        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True)\
+        .order_by(Transaction.date.asc()).all()
+
+    monthly_data = {}
+    all_categories = set()
+
+    for tx, cat_name, cat_color in transactions:
+        m_key = tx.date.strftime("%Y-%m")
+        c_name = cat_name or "Sem Categoria"
+        all_categories.add(c_name)
+
+        if m_key not in monthly_data:
+            monthly_data[m_key] = {
+                "month": m_key,
+                "income": Decimal("0.00"),
+                "expense": Decimal("0.00"),
+                "fixed_expense": Decimal("0.00"),
+                "variable_expense": Decimal("0.00"),
+                "categories": {}
+            }
+
+        amt = Decimal(str(tx.amount))
+        c_type = str(getattr(tx, "cost_type", None) or "variavel").lower()
+
+        if amt > 0:
+            monthly_data[m_key]["income"] += amt
+        else:
+            abs_amt = abs(amt)
+            monthly_data[m_key]["expense"] += abs_amt
+            if "fix" in c_type:
+                monthly_data[m_key]["fixed_expense"] += abs_amt
+            else:
+                monthly_data[m_key]["variable_expense"] += abs_amt
+
+            if c_name not in monthly_data[m_key]["categories"]:
+                monthly_data[m_key]["categories"][c_name] = Decimal("0.00")
+            monthly_data[m_key]["categories"][c_name] += abs_amt
+
+    sorted_months = sorted(monthly_data.keys())
+    months_list = []
+    tot_income = Decimal("0.00")
+    tot_expense = Decimal("0.00")
+    tot_fixed = Decimal("0.00")
+    tot_var = Decimal("0.00")
+
+    for m in sorted_months:
+        d = monthly_data[m]
+        inc = d["income"]
+        exp = d["expense"]
+        net = inc - exp
+        f_exp = d["fixed_expense"]
+        v_exp = d["variable_expense"]
+
+        tot_income += inc
+        tot_expense += exp
+        tot_fixed += f_exp
+        tot_var += v_exp
+
+        sav_rate = float(round((net / inc * 100), 1)) if inc > 0 else (0.0 if net >= 0 else -100.0)
+        f_pct = float(round((f_exp / exp * 100), 1)) if exp > 0 else 0.0
+        v_pct = float(round((v_exp / exp * 100), 1)) if exp > 0 else 0.0
+
+        months_list.append({
+            "month": m,
+            "income": float(inc),
+            "expense": float(exp),
+            "net": float(net),
+            "fixed_expense": float(f_exp),
+            "variable_expense": float(v_exp),
+            "fixed_expense_pct": f_pct,
+            "variable_expense_pct": v_pct,
+            "savings_rate": sav_rate,
+            "categories": {k: float(v) for k, v in d["categories"].items()}
+        })
+
+    num_months = max(len(months_list), 1)
+    return {
+        "months": months_list,
+        "categories_list": sorted(list(all_categories)),
+        "summary": {
+            "total_income": float(tot_income),
+            "total_expense": float(tot_expense),
+            "total_net": float(tot_income - tot_expense),
+            "avg_monthly_income": float(tot_income / num_months) if num_months > 0 else 0.0,
+            "avg_monthly_expense": float(tot_expense / num_months) if num_months > 0 else 0.0,
+            "avg_fixed_expense": float(tot_fixed / num_months) if num_months > 0 else 0.0,
+            "avg_variable_expense": float(tot_var / num_months) if num_months > 0 else 0.0,
+            "total_months_count": len(months_list)
+        }
+    }

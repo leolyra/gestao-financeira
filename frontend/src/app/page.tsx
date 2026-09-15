@@ -1377,6 +1377,7 @@ export default function Home() {
               </div>
             </div>
           </div>
+        </section>
       )}
 
       {/* ABA 1.5: EVOLUÇÃO HISTÓRICA MÊS A MÊS */}

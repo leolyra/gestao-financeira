@@ -1,3 +1,8 @@
+from io import BytesIO
+from fastapi.responses import StreamingResponse
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 from typing import List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -10,6 +15,7 @@ from app.schemas.transaction import (
     TransactionUpdateCategory, 
     TransactionUpdateCostType,
     TransactionUpdateAccounted,
+    ExportXlsxPayload,
     TransactionResponse,
     DashboardSummary
 )
@@ -17,6 +23,37 @@ from app.services.categorizer import auto_categorize
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+
+def resolve_date_range(period: str) -> tuple[Optional[datetime], Optional[datetime]]:
+    now = datetime.utcnow()
+    p = (period or "").lower().strip()
+    if p == "current_month":
+        start = datetime(now.year, now.month, 1, 0, 0, 0)
+        return start, None
+    elif p == "30d":
+        start = now - timedelta(days=30)
+        return start, None
+    elif p == "previous_month":
+        first_this_month = datetime(now.year, now.month, 1, 0, 0, 0)
+        last_prev_month = first_this_month - timedelta(seconds=1)
+        first_prev_month = datetime(last_prev_month.year, last_prev_month.month, 1, 0, 0, 0)
+        return first_prev_month, last_prev_month
+    elif p == "60d":
+        start = now - timedelta(days=60)
+        return start, None
+    elif p == "90d":
+        start = now - timedelta(days=90)
+        return start, None
+    elif p == "current_year":
+        start = datetime(now.year, 1, 1, 0, 0, 0)
+        return start, None
+    elif p == "12m":
+        start = now - timedelta(days=365)
+        return start, None
+    elif p == "all":
+        return None, None
+    return None, None
+
 
 @router.get("/", response_model=List[TransactionResponse])
 def list_transactions(
@@ -186,7 +223,7 @@ def get_summary(
     else:
         since_date = datetime.utcnow() - timedelta(days=days)
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
-        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True).all()
+        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted.is_(True)).all()
 
     total_income = Decimal("0.00")
     total_expense = Decimal("0.00")
@@ -284,7 +321,7 @@ def get_historical_evolution(
         since_date = datetime.utcnow() - timedelta(days=months * 31)
 
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
-        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True)\
+        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted.is_(True))\
         .order_by(Transaction.date.asc()).all()
 
     monthly_data = {}
@@ -374,3 +411,115 @@ def get_historical_evolution(
             "total_months_count": len(months_list)
         }
     }
+
+@router.post("/export-xlsx")
+def export_transactions_xlsx(
+    payload: ExportXlsxPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    query = db.query(
+        Transaction,
+        Category.name.label("category_name"),
+        Account.name.label("account_name")
+    ).join(Account, Transaction.account_id == Account.id)\
+     .outerjoin(Category, Transaction.category_id == Category.id)\
+     .filter(Account.user_id == current_user.id)
+
+    if payload.transaction_ids and len(payload.transaction_ids) > 0:
+        query = query.filter(Transaction.id.in_(payload.transaction_ids))
+    elif payload.period:
+        p_start, p_end = resolve_date_range(payload.period)
+        if p_start:
+            query = query.filter(Transaction.date >= p_start)
+        if p_end:
+            query = query.filter(Transaction.date <= p_end)
+
+    results = query.order_by(Transaction.date.desc()).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Extrato de Lançamentos"
+
+    # Estilos Visuais
+    header_fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    bold_font = Font(name="Calibri", size=11, bold=True)
+    regular_font = Font(name="Calibri", size=10)
+    thin_border = Border(
+        left=Side(style="thin", color="E2E8F0"),
+        right=Side(style="thin", color="E2E8F0"),
+        top=Side(style="thin", color="E2E8F0"),
+        bottom=Side(style="thin", color="E2E8F0")
+    )
+
+    headers = [
+        "Data", "Descrição", "Conta", "Categoria", 
+        "Tipo de Custo", "Contabilizado", "Operação", "Valor (R$)"
+    ]
+    ws.append(headers)
+
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for row_idx, (tx, cat_name, acc_name) in enumerate(results, start=2):
+        amt = float(tx.amount)
+        is_inc = amt > 0
+        dt_str = tx.date.strftime("%d/%m/%Y")
+        op_type = "Receita" if is_inc else "Despesa"
+        cost_t = "Fixa" if "fix" in (tx.cost_type or "").lower() else "Variável"
+        acc_t = "Sim" if (tx.is_accounted is not False) else "Não"
+
+        ws.append([
+            dt_str,
+            tx.description,
+            acc_name or "Conta",
+            cat_name or "Sem Categoria",
+            cost_t,
+            acc_t,
+            op_type,
+            amt
+        ])
+
+        v_cell = ws.cell(row=row_idx, column=8)
+        v_cell.number_format = "R$ #,##0.00;[Red]-R$ #,##0.00"
+        v_cell.alignment = Alignment(horizontal="right")
+
+        for c in range(1, 9):
+            ws.cell(row=row_idx, column=c).border = thin_border
+            ws.cell(row=row_idx, column=c).font = regular_font
+
+    # Totalizador
+    last_row = len(results) + 2
+    ws.append(["", "", "", "", "", "", "Líquido Geral:", f"=SUM(H2:H{last_row - 1})"])
+    ws.cell(row=last_row, column=7).font = bold_font
+    ws.cell(row=last_row, column=7).alignment = Alignment(horizontal="right")
+    ws.cell(row=last_row, column=8).font = bold_font
+    ws.cell(row=last_row, column=8).number_format = "R$ #,##0.00;[Red]-R$ #,##0.00"
+
+    # Ajuste automático de largura das colunas
+    for col in ws.columns:
+        max_len = 0
+        for cell in col:
+            val_str = str(cell.value or "")
+            if len(val_str) > max_len:
+                max_len = len(val_str)
+        col_letter = get_column_letter(col[0].column)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"extrato_lancamentos_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
+    )

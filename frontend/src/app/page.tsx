@@ -28,7 +28,8 @@ import {
   Target,
   CheckCircle,
   AlertCircle,
-  Calendar
+  Calendar,
+  Download
 } from 'lucide-react';
 import { fetchWithAuth, setToken, getToken, removeToken } from '@/lib/api';
 
@@ -263,6 +264,8 @@ export default function Home() {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterCostType, setFilterCostType] = useState<'all' | 'fixa' | 'variavel'>('all');
   const [filterAccounted, setFilterAccounted] = useState<'all' | 'yes' | 'no'>('all');
+  const [filterPeriod, setFilterPeriod] = useState<string>('all');
+  const [isExportingXlsx, setIsExportingXlsx] = useState<boolean>(false);
 
   // Dashboard Days & Historical Evolution State
   const [dashboardDays, setDashboardDays] = useState<number>(90);
@@ -631,6 +634,87 @@ export default function Home() {
     } catch (err: any) {
       console.error(err);
       alert('Falha de conexão com a API: ' + err.message);
+    }
+  }
+
+  function matchesPeriod(txDateStr: string, period: string): boolean {
+    if (period === 'all') return true;
+    const txDate = new Date(txDateStr);
+    const now = new Date();
+
+    if (period === 'current_month') {
+      return txDate.getFullYear() === now.getFullYear() && txDate.getMonth() === now.getMonth();
+    } else if (period === '30d') {
+      const diff = now.getTime() - txDate.getTime();
+      return diff >= 0 && diff <= (30 * 24 * 60 * 60 * 1000);
+    } else if (period === 'previous_month') {
+      const prevMonth = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+      const prevYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+      return txDate.getFullYear() === prevYear && txDate.getMonth() === prevMonth;
+    } else if (period === '60d') {
+      const diff = now.getTime() - txDate.getTime();
+      return diff >= 0 && diff <= (60 * 24 * 60 * 60 * 1000);
+    } else if (period === '90d') {
+      const diff = now.getTime() - txDate.getTime();
+      return diff >= 0 && diff <= (90 * 24 * 60 * 60 * 1000);
+    } else if (period === 'current_year') {
+      return txDate.getFullYear() === now.getFullYear();
+    } else if (period === '12m') {
+      const diff = now.getTime() - txDate.getTime();
+      return diff >= 0 && diff <= (365 * 24 * 60 * 60 * 1000);
+    }
+    return true;
+  }
+
+  async function handleExportXlsx() {
+    setIsExportingXlsx(true);
+    try {
+      const token = getToken();
+      const currentFiltered = transactions.filter(t => {
+        if (!matchesPeriod(t.date, filterPeriod)) return false;
+        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+        if (filterCategory !== 'all') {
+          if (filterCategory === 'none' && t.category_id) return false;
+          if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
+        }
+        if (filterCostType !== 'all' && (t.cost_type || 'variavel') !== filterCostType) return false;
+        if (filterAccounted !== 'all') {
+          const isAcc = t.is_accounted ?? true;
+          if (filterAccounted === 'yes' && !isAcc) return false;
+          if (filterAccounted === 'no' && isAcc) return false;
+        }
+        return true;
+      });
+
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'https://api-financeira.leo.lyra.nom.br'}/api/v1/transactions/export-xlsx`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          transaction_ids: currentFiltered.map(t => t.id),
+          period: filterPeriod
+        })
+      });
+
+      if (!res.ok) {
+        throw new Error('Falha ao gerar arquivo Excel no servidor.');
+      }
+
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `extrato_${filterPeriod}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err: any) {
+      alert('Erro na exportação para Excel: ' + err.message);
+    } finally {
+      setIsExportingXlsx(false);
     }
   }
 
@@ -1783,6 +1867,7 @@ export default function Home() {
                 <h3 className="text-sm font-semibold text-white">Extrato Consolidado de Transações</h3>
                 <span className="text-xs text-slate-400">
                   {transactions.filter(t => {
+                    if (!matchesPeriod(t.date, filterPeriod)) return false;
                     if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
@@ -1799,8 +1884,25 @@ export default function Home() {
                 </span>
               </div>
 
-              {/* Barra de Filtros Múltiplos: Conta, Categoria, Tipo e Contabilização */}
+              {/* Barra de Filtros Múltiplos: Período, Conta, Categoria, Tipo e Contabilização */}
               <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                {/* Filtro por Período */}
+                <select
+                  value={filterPeriod}
+                  onChange={(e) => setFilterPeriod(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Filtrar por Período de Datas"
+                >
+                  <option value="all">Todo o Histórico</option>
+                  <option value="current_month">Mês Atual</option>
+                  <option value="30d">Últimos 30 dias</option>
+                  <option value="previous_month">Mês Anterior</option>
+                  <option value="60d">Últimos 60 dias</option>
+                  <option value="90d">Últimos 90 dias</option>
+                  <option value="current_year">Este Ano</option>
+                  <option value="12m">Últimos 12 meses</option>
+                </select>
+
                 {/* Filtro por Conta */}
                 <select
                   value={filterAccount}
@@ -1852,10 +1954,11 @@ export default function Home() {
                   <option value="no">Apenas Ignorados</option>
                 </select>
 
-                {(filterAccount !== 'all' || filterCategory !== 'all' || filterCostType !== 'all' || filterAccounted !== 'all') && (
+                {(filterAccount !== 'all' || filterCategory !== 'all' || filterCostType !== 'all' || filterAccounted !== 'all' || filterPeriod !== 'all') && (
                   <button
                     type="button"
                     onClick={() => {
+                      setFilterPeriod('all');
                       setFilterAccount('all');
                       setFilterCategory('all');
                       setFilterCostType('all');
@@ -1866,6 +1969,18 @@ export default function Home() {
                     Limpar Filtros
                   </button>
                 )}
+
+                {/* Botão Exportar Excel .XLSX */}
+                <button
+                  type="button"
+                  onClick={handleExportXlsx}
+                  disabled={isExportingXlsx}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-semibold shadow transition disabled:opacity-50"
+                  title="Exportar registros filtrados para planilha Excel (.xlsx)"
+                >
+                  <Download className={`w-3.5 h-3.5 ${isExportingXlsx ? 'animate-spin' : ''}`} />
+                  <span>{isExportingXlsx ? 'Exportando...' : 'Exportar (.xlsx)'}</span>
+                </button>
               </div>
             </div>
 
@@ -1884,6 +1999,7 @@ export default function Home() {
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
                   {transactions.filter(t => {
+                    if (!matchesPeriod(t.date, filterPeriod)) return false;
                     if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;

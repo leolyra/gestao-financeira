@@ -42,3 +42,7 @@ class DashboardSummary(BaseModel):
     expenses_by_category: List[Dict[str, Any]]
     monthly_trend: List[Dict[str, Any]]
     cost_type_summary: Optional[Dict[str, Any]] = None
+
+class ExportXlsxPayload(BaseModel):
+    transaction_ids: Optional[List[int]] = None
+    period: Optional[str] = None

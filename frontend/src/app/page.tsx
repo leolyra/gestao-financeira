@@ -1423,6 +1423,20 @@ export default function Home() {
                             ))}
                           </select>
                         </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <select
+                            value={tx.cost_type || 'variavel'}
+                            onChange={(e) => handleUpdateCostType(tx.id, e.target.value)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border focus:outline-none transition shadow-sm ${
+                              tx.cost_type === 'fixa'
+                                ? 'bg-purple-950/70 border-purple-600/50 text-purple-300 hover:bg-purple-900/60'
+                                : 'bg-amber-950/70 border-amber-600/50 text-amber-300 hover:bg-amber-900/60'
+                            }`}
+                          >
+                            <option value="variavel">Variável</option>
+                            <option value="fixa">Fixa</option>
+                          </select>
+                        </td>
                         <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {isIncome ? '+' : ''} R$ {Number(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </td>
@@ -1431,7 +1445,7 @@ export default function Home() {
                   })}
                   {transactions.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-xs text-slate-500">
+                      <td colSpan={6} className="py-8 text-center text-xs text-slate-500">
                         Nenhum lançamento registrado. Conecte seu banco via Open Finance ou insira lançamentos manuais acima.
                       </td>
                     </tr>

@@ -198,6 +198,10 @@ export default function Home() {
   // Investment State
   const [portfolio, setPortfolio] = useState<PortfolioPosition[]>([]);
   const [invTransactions, setInvTransactions] = useState<InvestmentTransaction[]>([]);
+  // Diagnostics Modal State
+  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
+  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
+  const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
   const [invSummary, setInvSummary] = useState<InvestmentSummary | null>(null);
 
   // Modais de Investimento
@@ -241,11 +245,6 @@ export default function Home() {
   const [pluggyStatusMsg, setPluggyStatusMsg] = useState('');
   const [customItemId, setCustomItemId] = useState('');
   const [showItemInput, setShowItemInput] = useState(false);
-
-  // Diagnostics State
-  const [showDiagnosticsModal, setShowDiagnosticsModal] = useState(false);
-  const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
-  const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
 
   useEffect(() => {
     const savedToken = getToken();
@@ -699,25 +698,23 @@ export default function Home() {
     }
   }
 
-  // Sincronizar conexões já existentes no Pluggy
   async function handleOpenDiagnostics() {
     setIsLoadingDiagnostics(true);
-    setShowDiagnosticsModal(true);
+    setPluggyStatusMsg('Consultando status detalhado das conexões na Pluggy...');
     try {
       const res = await fetchWithAuth('/open-finance/diagnostics');
-      if (res.ok) {
-        const data = await res.json();
-        setDiagnosticsData(data);
-      } else {
-        alert('Erro ao carregar diagnóstico: ' + res.statusText);
-      }
+      const data = await res.json();
+      setDiagnosticsData(data);
+      setShowDiagnosticsModal(true);
+      setPluggyStatusMsg('Diagnóstico carregado com sucesso!');
     } catch (err: any) {
-      alert('Falha na comunicação: ' + err.message);
+      setPluggyStatusMsg('Erro ao carregar diagnóstico: ' + err.message);
     } finally {
       setIsLoadingDiagnostics(false);
     }
   }
 
+  // Sincronizar conexões já existentes no Pluggy
   async function handleSyncAllExisting() {
     setIsConnectingPluggy(true);
     setPluggyStatusMsg("Buscando todas as contas já autorizadas na Pluggy...");
@@ -888,7 +885,139 @@ export default function Home() {
             </button>
           </div>
         </div>
-      </main>
+        {/* Modal de Diagnóstico Open Finance */}
+      {showDiagnosticsModal && diagnosticsData && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full p-6 shadow-2xl my-8 max-h-[85vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-amber-400" /> Diagnóstico das Conexões Bancárias
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Dados retornados diretamente pela API da Pluggy para as suas contas conectadas
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDiagnosticsModal(false)}
+                className="text-slate-400 hover:text-white px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 rounded-lg transition"
+              >
+                ✕ Fechar
+              </button>
+            </div>
+
+            {/* Resumo do Banco Local */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-4">
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Contas Correntes</span>
+                <span className="text-lg font-semibold text-white">{diagnosticsData.database_summary?.checking_accounts || 0}</span>
+              </div>
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Cartões de Crédito</span>
+                <span className="text-lg font-semibold text-indigo-400">{diagnosticsData.database_summary?.credit_cards || 0}</span>
+              </div>
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Transações Salvas</span>
+                <span className="text-lg font-semibold text-emerald-400">{diagnosticsData.database_summary?.transactions_count || 0}</span>
+              </div>
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Posições Investimentos</span>
+                <span className="text-lg font-semibold text-amber-400">{diagnosticsData.database_summary?.investments_count || 0}</span>
+              </div>
+            </div>
+
+            {/* Lista de Itens Conectados */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Instituições Encontradas ({diagnosticsData.total_items_found || 0})
+              </h4>
+
+              {(!diagnosticsData.items || diagnosticsData.items.length === 0) && (
+                <div className="p-4 bg-slate-800/40 rounded-xl text-center text-xs text-slate-400">
+                  Nenhuma conexão com itemId encontrado. Clique em "Nova Conexão" para autorizar seu banco.
+                </div>
+              )}
+
+              {diagnosticsData.items?.map((it: any, idx: number) => (
+                <div key={idx} className="p-4 bg-slate-800/50 border border-slate-700/70 rounded-xl space-y-3">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <span className="font-bold text-white text-sm">{it.connector_name}</span>
+                      <span className="text-[10px] text-slate-500 block font-mono">ID: {it.item_id}</span>
+                    </div>
+                    <span className={}>
+                      {it.status || 'OK'}
+                    </span>
+                  </div>
+
+                  {/* Contas do banco */}
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-300 block mb-1">Contas e Cartões Retornados:</span>
+                    <div className="space-y-1.5">
+                      {it.accounts?.map((acc: any, aidx: number) => (
+                        <div key={aidx} className="flex justify-between items-center text-xs p-2 bg-slate-900/60 rounded border border-slate-800">
+                          <div>
+                            <span className="text-slate-200 font-medium">{acc.name}</span>
+                            <span className="text-[10px] text-slate-400 ml-2">({acc.type} / {acc.subtype})</span>
+                            {acc.bills_found > 0 && (
+                              <span className="text-[10px] text-indigo-400 ml-2 font-medium">· {acc.bills_found} fatura(s)</span>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="text-slate-200 font-medium">R$ {Number(acc.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <span className="text-[10px] text-slate-400 block">{acc.transactions_found} transação(ões)</span>
+                          </div>
+                        </div>
+                      ))}
+                      {(!it.accounts || it.accounts.length === 0) && (
+                        <p className="text-[11px] text-slate-500 italic">Nenhuma conta retornada para esta instituição.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Investimentos do banco */}
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-300 block mb-1">
+                      Investimentos Retornados ({it.investments?.length || 0}):
+                    </span>
+                    {it.investments?.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
+                        {it.investments.map((inv: any, iidx: number) => (
+                          <div key={iidx} className="p-2 bg-slate-900/60 rounded border border-slate-800 text-xs">
+                            <div className="font-semibold text-slate-200">{inv.name || inv.code}</div>
+                            <div className="text-[10px] text-slate-400 flex justify-between mt-0.5">
+                              <span>{inv.type || inv.subtype}</span>
+                              <span className="text-emerald-400 font-medium">R$ {Number(inv.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-amber-400/80 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                        O banco não retornou investimentos nesta conexão. Se você possui investimentos nesta instituição, verifique se a opção "Investimentos" foi marcada na autorização do app bancário.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  setShowDiagnosticsModal(false);
+                  handleSyncAllExisting();
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow transition"
+              >
+                Sincronizar Todas Agora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </main>
+
     );
   }
 
@@ -915,10 +1044,11 @@ export default function Home() {
           </button>
           <button
             onClick={handleOpenDiagnostics}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium shadow-sm transition"
-            title="Diagnóstico detalhado das permissões e retornos da Pluggy"
+            disabled={isLoadingDiagnostics}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-medium shadow transition disabled:opacity-50"
+            title="Verificar permissões e itens retornados por cada banco"
           >
-            <Bot className="w-3.5 h-3.5" /> Diagnóstico das Conexões
+            <AlertCircle className={`w-3.5 h-3.5 ${isLoadingDiagnostics ? "animate-spin" : ""}`} /> Diagnóstico Conexões
           </button>
           <button
             onClick={() => setShowItemInput(!showItemInput)}
@@ -2069,6 +2199,138 @@ export default function Home() {
           </div>
         </section>
       )}
+      {/* Modal de Diagnóstico Open Finance */}
+      {showDiagnosticsModal && diagnosticsData && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-3xl w-full p-6 shadow-2xl my-8 max-h-[85vh] overflow-y-auto">
+            <div className="flex justify-between items-center pb-4 border-b border-slate-800">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-amber-400" /> Diagnóstico das Conexões Bancárias
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Dados retornados diretamente pela API da Pluggy para as suas contas conectadas
+                </p>
+              </div>
+              <button
+                onClick={() => setShowDiagnosticsModal(false)}
+                className="text-slate-400 hover:text-white px-2.5 py-1 text-xs bg-slate-800 hover:bg-slate-700 rounded-lg transition"
+              >
+                ✕ Fechar
+              </button>
+            </div>
+
+            {/* Resumo do Banco Local */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-4">
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Contas Correntes</span>
+                <span className="text-lg font-semibold text-white">{diagnosticsData.database_summary?.checking_accounts || 0}</span>
+              </div>
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Cartões de Crédito</span>
+                <span className="text-lg font-semibold text-indigo-400">{diagnosticsData.database_summary?.credit_cards || 0}</span>
+              </div>
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Transações Salvas</span>
+                <span className="text-lg font-semibold text-emerald-400">{diagnosticsData.database_summary?.transactions_count || 0}</span>
+              </div>
+              <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50">
+                <span className="text-[11px] text-slate-400 block">Posições Investimentos</span>
+                <span className="text-lg font-semibold text-amber-400">{diagnosticsData.database_summary?.investments_count || 0}</span>
+              </div>
+            </div>
+
+            {/* Lista de Itens Conectados */}
+            <div className="space-y-4">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Instituições Encontradas ({diagnosticsData.total_items_found || 0})
+              </h4>
+
+              {(!diagnosticsData.items || diagnosticsData.items.length === 0) && (
+                <div className="p-4 bg-slate-800/40 rounded-xl text-center text-xs text-slate-400">
+                  Nenhuma conexão com itemId encontrado. Clique em "Nova Conexão" para autorizar seu banco.
+                </div>
+              )}
+
+              {diagnosticsData.items?.map((it: any, idx: number) => (
+                <div key={idx} className="p-4 bg-slate-800/50 border border-slate-700/70 rounded-xl space-y-3">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <span className="font-bold text-white text-sm">{it.connector_name}</span>
+                      <span className="text-[10px] text-slate-500 block font-mono">ID: {it.item_id}</span>
+                    </div>
+                    <span className={}>
+                      {it.status || 'OK'}
+                    </span>
+                  </div>
+
+                  {/* Contas do banco */}
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-300 block mb-1">Contas e Cartões Retornados:</span>
+                    <div className="space-y-1.5">
+                      {it.accounts?.map((acc: any, aidx: number) => (
+                        <div key={aidx} className="flex justify-between items-center text-xs p-2 bg-slate-900/60 rounded border border-slate-800">
+                          <div>
+                            <span className="text-slate-200 font-medium">{acc.name}</span>
+                            <span className="text-[10px] text-slate-400 ml-2">({acc.type} / {acc.subtype})</span>
+                            {acc.bills_found > 0 && (
+                              <span className="text-[10px] text-indigo-400 ml-2 font-medium">· {acc.bills_found} fatura(s)</span>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="text-slate-200 font-medium">R$ {Number(acc.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <span className="text-[10px] text-slate-400 block">{acc.transactions_found} transação(ões)</span>
+                          </div>
+                        </div>
+                      ))}
+                      {(!it.accounts || it.accounts.length === 0) && (
+                        <p className="text-[11px] text-slate-500 italic">Nenhuma conta retornada para esta instituição.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Investimentos do banco */}
+                  <div>
+                    <span className="text-[11px] font-medium text-slate-300 block mb-1">
+                      Investimentos Retornados ({it.investments?.length || 0}):
+                    </span>
+                    {it.investments?.length > 0 ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto">
+                        {it.investments.map((inv: any, iidx: number) => (
+                          <div key={iidx} className="p-2 bg-slate-900/60 rounded border border-slate-800 text-xs">
+                            <div className="font-semibold text-slate-200">{inv.name || inv.code}</div>
+                            <div className="text-[10px] text-slate-400 flex justify-between mt-0.5">
+                              <span>{inv.type || inv.subtype}</span>
+                              <span className="text-emerald-400 font-medium">R$ {Number(inv.balance || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-amber-400/80 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+                        O banco não retornou investimentos nesta conexão. Se você possui investimentos nesta instituição, verifique se a opção "Investimentos" foi marcada na autorização do app bancário.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-slate-800">
+              <button
+                onClick={() => {
+                  setShowDiagnosticsModal(false);
+                  handleSyncAllExisting();
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow transition"
+              >
+                Sincronizar Todas Agora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
+
   );
 }

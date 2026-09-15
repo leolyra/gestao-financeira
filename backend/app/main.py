@@ -1,11 +1,23 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.api.router import api_router
 
+def run_migrations():
+    try:
+        with engine.begin() as conn:
+            conn.execute(text('ALTER TABLE investment_transactions ADD COLUMN IF NOT EXISTS costs NUMERIC(14, 2) DEFAULT 0.00;'))
+            conn.execute(text('ALTER TABLE investment_transactions ADD COLUMN IF NOT EXISTS notes VARCHAR(255);'))
+            conn.execute(text('ALTER TABLE accounts ADD COLUMN IF NOT EXISTS pluggy_item_id VARCHAR(100);'))
+            print('Database auto-migrations executed successfully.')
+    except Exception as e:
+        print(f'Migration notice: {e}')
+
 Base.metadata.create_all(bind=engine)
+run_migrations()
 
 app = FastAPI(title=settings.PROJECT_NAME, version="1.0.0")
 

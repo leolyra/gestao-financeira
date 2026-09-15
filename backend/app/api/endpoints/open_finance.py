@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
@@ -110,6 +111,7 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                 name=acc_name,
                 type=acc_type,
                 pluggy_account_id=p_acc_id,
+                pluggy_item_id=item_id,
                 balance=acc_balance
             )
             db.add(account)
@@ -118,7 +120,8 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
             synced_accs += 1
         else:
             account.balance = acc_balance
-            account.type = acc_type  # Atualiza caso tenha sido classificado errado anteriormente
+            account.type = acc_type
+            account.pluggy_item_id = item_id
             db.commit()
 
         # 1. Transações diretas da conta
@@ -255,49 +258,61 @@ async def sync_all_existing_items(
     total_transactions = 0
     total_investments = 0
     items_processed = 0
-    items_success = False
 
-    try:
-        items = await pluggy_service.get_all_items()
-        for item in items:
-            item_id = item.get("id")
-            if not item_id:
-                continue
-            accs, txs, invs, it_status = await _process_item(item_id, current_user.id, db)
-            total_accounts += accs
-            total_transactions += txs
-            total_investments += invs
-            items_processed += 1
-        items_success = True
-    except Exception as e:
-        print(f"[OPEN_FINANCE] Aviso ao listar items gerais: {e}")
-
-    # Sincroniza contas já salvas no banco
     existing_accounts = db.query(Account).filter(
         Account.user_id == current_user.id,
         Account.pluggy_account_id.isnot(None)
     ).all()
 
+    item_ids = set()
+    for acc in existing_accounts:
+        if getattr(acc, "pluggy_item_id", None):
+            item_ids.add(acc.pluggy_item_id)
+        else:
+            try:
+                p_acc = await pluggy_service.get_account(acc.pluggy_account_id)
+                iid = p_acc.get("itemId")
+                if iid:
+                    item_ids.add(iid)
+                    acc.pluggy_item_id = iid
+                    db.commit()
+            except Exception as e:
+                print(f"[SYNC_ALL] Erro ao recuperar itemId da conta {acc.id}: {e}")
+
+    for item_id in item_ids:
+        try:
+            accs, txs, invs, it_status = await _process_item(item_id, current_user.id, db)
+            total_accounts += accs
+            total_transactions += txs
+            total_investments += invs
+            items_processed += 1
+        except Exception as e:
+            print(f"[SYNC_ALL] Erro ao processar item {item_id}: {e}")
+
+    # Garante sincronizacao direta para qualquer conta que ja esteja no banco
     for acc in existing_accounts:
         is_cc = (acc.type == "credit_card")
-        p_txs = await pluggy_service.get_transactions(acc.pluggy_account_id)
-        if is_cc:
-            bills = await pluggy_service.get_bills(acc.pluggy_account_id)
-            for b in bills:
-                b_id = b.get("id")
-                if b_id:
-                    b_txs = await pluggy_service.get_transactions(acc.pluggy_account_id, bill_id=b_id)
-                    p_txs.extend(b_txs)
+        try:
+            p_txs = await pluggy_service.get_transactions(acc.pluggy_account_id)
+            if is_cc:
+                bills = await pluggy_service.get_bills(acc.pluggy_account_id)
+                for b in bills:
+                    b_id = b.get("id")
+                    if b_id:
+                        b_txs = await pluggy_service.get_transactions(acc.pluggy_account_id, bill_id=b_id)
+                        p_txs.extend(b_txs)
 
-        for p_tx in p_txs:
-            if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
-                total_transactions += 1
-    
+            for p_tx in p_txs:
+                if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
+                    total_transactions += 1
+        except Exception as e:
+            print(f"[SYNC_ALL] Erro ao sincronizar transacoes da conta {acc.id}: {e}")
+
     db.commit()
 
     return {
         "status": "success",
-        "items_count": items_processed or len(existing_accounts),
+        "items_count": items_processed or len(item_ids),
         "accounts_synced": total_accounts or len(existing_accounts),
         "transactions_synced": total_transactions,
         "investments_synced": total_investments
@@ -343,16 +358,35 @@ async def get_open_finance_diagnostics(
             "checking_accounts": db.query(Account).filter(Account.user_id == current_user.id, Account.type != "credit_card").count(),
             "credit_cards": db.query(Account).filter(Account.user_id == current_user.id, Account.type == "credit_card").count(),
             "transactions_count": db.query(Transaction).join(Account).filter(Account.user_id == current_user.id).count(),
-            "investments_count": db.query(InvestmentTransaction).filter(InvestmentTransaction.user_id == current_user.id).count()
+            "investments_count": db.query(func.count(InvestmentTransaction.id)).filter(InvestmentTransaction.user_id == current_user.id).scalar() or 0
         }
     }
 
     try:
-        items = await pluggy_service.get_all_items()
-        report["total_items_found"] = len(items)
+        user_accounts = db.query(Account).filter(
+            Account.user_id == current_user.id,
+            Account.pluggy_account_id.isnot(None)
+        ).all()
 
-        for it in items:
-            it_id = it.get("id")
+        item_ids = set()
+        for acc in user_accounts:
+            if getattr(acc, "pluggy_item_id", None):
+                item_ids.add(acc.pluggy_item_id)
+            else:
+                try:
+                    p_acc = await pluggy_service.get_account(acc.pluggy_account_id)
+                    iid = p_acc.get("itemId")
+                    if iid:
+                        item_ids.add(iid)
+                        acc.pluggy_item_id = iid
+                        db.commit()
+                except Exception as e:
+                    print(f"[DIAGNOSTICS] Erro ao recuperar itemId da conta {acc.id}: {e}")
+
+        report["total_items_found"] = len(item_ids)
+
+        for it_id in item_ids:
+            it = await pluggy_service.get_item(it_id)
             connector = it.get("connector") or {}
             conn_name = connector.get("name") or "Desconhecido"
             it_status = it.get("status")

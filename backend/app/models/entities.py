@@ -17,6 +17,7 @@ class Account(Base):
     name = Column(String(100), nullable=False)
     type = Column(String(50), nullable=False) # checking, credit_card, investment
     pluggy_account_id = Column(String(100), nullable=True)
+    pluggy_item_id = Column(String(100), nullable=True)
     balance = Column(Numeric(14, 2), default=0.00)
 
 class Category(Base):

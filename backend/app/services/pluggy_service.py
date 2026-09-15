@@ -85,6 +85,25 @@ class PluggyService:
             raise Exception(f"Erro ao buscar conexoes existentes: {res.text}")
         return res.json().get("results", [])
 
+    async def get_account(self, account_id: str) -> Dict[str, Any]:
+        try:
+            res = await self._request("GET", f"/accounts/{account_id}")
+            if res.status_code == 200:
+                return res.json()
+            print(f"[PLUGGY] /accounts/{account_id} retornou {res.status_code}: {res.text}")
+        except Exception as e:
+            print(f"[PLUGGY] Erro ao buscar conta {account_id}: {e}")
+        return {}
+
+    async def get_item_resources(self, item_id: str) -> Dict[str, Any]:
+        try:
+            res = await self._request("GET", f"/items/{item_id}/resources")
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"[PLUGGY] Aviso ao buscar recursos do item {item_id}: {e}")
+        return {}
+
     async def get_accounts(self, item_id: str) -> List[Dict[str, Any]]:
         res = await self._request("GET", "/accounts", params={"itemId": item_id})
         if res.status_code != 200:

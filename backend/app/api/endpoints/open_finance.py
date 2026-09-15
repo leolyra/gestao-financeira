@@ -111,12 +111,14 @@ async def sync_all_existing_items(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    total_accounts = 0
+    total_transactions = 0
+    items_processed = 0
+    items_success = False
+
+    # 1. Tenta buscar todos os items registrados na Pluggy
     try:
         items = await pluggy_service.get_all_items()
-        total_accounts = 0
-        total_transactions = 0
-        items_processed = 0
-
         for item in items:
             item_id = item.get("id")
             if not item_id:
@@ -125,21 +127,74 @@ async def sync_all_existing_items(
             total_accounts += accs
             total_transactions += txs
             items_processed += 1
-
-        message = None
-        if total_transactions == 0 and total_accounts > 0:
-            message = "Contas sincronizadas! O banco ainda pode estar consolidando o extrato. Se as transações não aparecerem, aguarde 1 minuto e clique em Sincronizar novamente."
-
-        return {
-            "status": "success",
-            "items_count": items_processed,
-            "accounts_synced": total_accounts,
-            "transactions_synced": total_transactions,
-            "notice": message
-        }
+        items_success = True
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        print(f"[OPEN_FINANCE] Aviso ao listar items gerais da Pluggy: {e}")
+
+    # 2. Sincroniza diretamente qualquer conta já existente no banco de dados com pluggy_account_id
+    existing_accounts = db.query(Account).filter(
+        Account.user_id == current_user.id,
+        Account.pluggy_account_id.isnot(None)
+    ).all()
+
+    for acc in existing_accounts:
+        try:
+            p_txs = await pluggy_service.get_transactions(acc.pluggy_account_id)
+            for p_tx in p_txs:
+                tx_id = p_tx.get("id")
+                if not tx_id:
+                    continue
+                existing_tx = db.query(Transaction).filter(Transaction.pluggy_transaction_id == tx_id).first()
+                if not existing_tx:
+                    desc = p_tx.get("description") or "Transação Bancária"
+                    amount = Decimal(str(p_tx.get("amount", 0)))
+                    raw_date = p_tx.get("date", "")
+                    try:
+                        if raw_date:
+                            clean_date = raw_date.replace("Z", "+00:00")
+                            dt = datetime.fromisoformat(clean_date)
+                            tx_date = dt.replace(tzinfo=None)
+                        else:
+                            tx_date = datetime.utcnow()
+                    except Exception:
+                        tx_date = datetime.utcnow()
+
+                    cat_id = auto_categorize(desc, current_user.id, db)
+
+                    new_tx = Transaction(
+                        account_id=acc.id,
+                        category_id=cat_id,
+                        description=desc,
+                        amount=amount,
+                        date=tx_date,
+                        is_manual=False,
+                        pluggy_transaction_id=tx_id
+                    )
+                    db.add(new_tx)
+                    total_transactions += 1
+            db.commit()
+        except Exception as e:
+            print(f"[OPEN_FINANCE] Erro ao sincronizar transações da conta {acc.id}: {e}")
+
+    # Se a listagem falhou e não temos nenhuma conta salva, levanta o erro da Pluggy
+    if not items_success and not existing_accounts:
+        # Re-chama get_all_items para obter a exceção com a mensagem exata
+        try:
+            await pluggy_service.get_all_items()
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    message = None
+    if total_transactions == 0 and (total_accounts > 0 or existing_accounts):
+        message = "Contas atualizadas! O banco ainda pode estar consolidando o extrato. Se as transações não aparecerem, aguarde 1 minuto e clique em Sincronizar novamente."
+
+    return {
+        "status": "success",
+        "items_count": items_processed or len(existing_accounts),
+        "accounts_synced": total_accounts or len(existing_accounts),
+        "transactions_synced": total_transactions,
+        "notice": message
+    }
 
 @router.post("/sync-item")
 async def sync_item(

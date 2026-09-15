@@ -11,9 +11,10 @@ class PluggyService:
         self._api_key_obtained_at: float = 0.0
 
     def get_credentials(self) -> tuple[str, str]:
-        # Leitura dinâmica para garantir que valores atualizados de variáveis de ambiente sejam capturados
-        client_id = (settings.PLUGGY_CLIENT_ID or "").strip()
-        client_secret = (settings.PLUGGY_CLIENT_SECRET or "").strip()
+        import os
+        # Leitura direta do os.environ para garantir atualização imediata após salvar no Easypanel
+        client_id = (os.environ.get("PLUGGY_CLIENT_ID") or settings.PLUGGY_CLIENT_ID or "").strip().strip("\"'").strip()
+        client_secret = (os.environ.get("PLUGGY_CLIENT_SECRET") or settings.PLUGGY_CLIENT_SECRET or "").strip().strip("\"'").strip()
         return client_id, client_secret
 
     async def get_api_key(self, force_refresh: bool = False) -> str:
@@ -63,9 +64,9 @@ class PluggyService:
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.request(method, url, headers=headers, params=params, json=json_data)
             
-            # Se receber 401 ou 403 de token expirado/inválido, tenta renovar a API Key uma vez
-            if res.status_code in (401, 403) and "API_KEY" in res.text:
-                print(f"[PLUGGY] Token expirado ou rejeitado na rota {path}. Renovando chave e tentando novamente...")
+            # Se receber 401 ou 403 de token expirado/inválido/não autorizado, renova a API Key e tenta novamente
+            if res.status_code in (401, 403):
+                print(f"[PLUGGY] Status {res.status_code} na rota {path}. Renovando chave e tentando novamente...")
                 self._api_key = None
                 new_key = await self.get_api_key(force_refresh=True)
                 headers["X-API-KEY"] = new_key

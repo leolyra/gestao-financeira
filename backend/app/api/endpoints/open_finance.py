@@ -29,7 +29,14 @@ async def get_connect_token(current_user: User = Depends(get_current_user)):
             detail=f"Falha na autenticação da Pluggy: {str(e)}"
         )
 
+import asyncio
+
 async def _process_item(item_id: str, current_user_id: int, db: Session):
+    # Obtém detalhes do item para checar status da coleta
+    item_info = await pluggy_service.get_item(item_id)
+    item_status = item_info.get("status", "")
+    execution_status = item_info.get("executionStatus", "")
+
     pluggy_accounts = await pluggy_service.get_accounts(item_id)
     synced_accs = 0
     synced_txs = 0
@@ -57,7 +64,14 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
             account.balance = acc_balance
             db.commit()
 
+        # Busca transações (suporta /v2/transactions e /transactions)
         p_txs = await pluggy_service.get_transactions(p_acc_id)
+        
+        # Se veio vazio e o item ainda está em processamento, aguarda brevemente e tenta novamente
+        if not p_txs and item_status == "UPDATING":
+            await asyncio.sleep(2.5)
+            p_txs = await pluggy_service.get_transactions(p_acc_id)
+
         for p_tx in p_txs:
             tx_id = p_tx.get("id")
             existing_tx = db.query(Transaction).filter(Transaction.pluggy_transaction_id == tx_id).first()
@@ -65,7 +79,15 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                 desc = p_tx.get("description") or "Transação Bancária"
                 amount = Decimal(str(p_tx.get("amount", 0)))
                 raw_date = p_tx.get("date", "")
-                tx_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00")) if raw_date else datetime.utcnow()
+                try:
+                    if raw_date:
+                        clean_date = raw_date.replace("Z", "+00:00")
+                        dt = datetime.fromisoformat(clean_date)
+                        tx_date = dt.replace(tzinfo=None)
+                    else:
+                        tx_date = datetime.utcnow()
+                except Exception:
+                    tx_date = datetime.utcnow()
 
                 cat_id = auto_categorize(desc, current_user_id, db)
 
@@ -82,7 +104,7 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                 synced_txs += 1
 
     db.commit()
-    return synced_accs, synced_txs
+    return synced_accs, synced_txs, item_status
 
 @router.post("/sync-all")
 async def sync_all_existing_items(
@@ -99,16 +121,21 @@ async def sync_all_existing_items(
             item_id = item.get("id")
             if not item_id:
                 continue
-            accs, txs = await _process_item(item_id, current_user.id, db)
+            accs, txs, it_status = await _process_item(item_id, current_user.id, db)
             total_accounts += accs
             total_transactions += txs
             items_processed += 1
+
+        message = None
+        if total_transactions == 0 and total_accounts > 0:
+            message = "Contas sincronizadas! O banco ainda pode estar consolidando o extrato. Se as transações não aparecerem, aguarde 1 minuto e clique em Sincronizar novamente."
 
         return {
             "status": "success",
             "items_count": items_processed,
             "accounts_synced": total_accounts,
-            "transactions_synced": total_transactions
+            "transactions_synced": total_transactions,
+            "notice": message
         }
     except Exception as e:
         db.rollback()
@@ -125,7 +152,7 @@ async def sync_item(
         raise HTTPException(status_code=400, detail="itemId é obrigatório.")
 
     try:
-        accs, txs = await _process_item(item_id, current_user.id, db)
+        accs, txs, it_status = await _process_item(item_id, current_user.id, db)
         return {
             "status": "success",
             "accounts_synced": accs,

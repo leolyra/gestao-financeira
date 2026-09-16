@@ -146,7 +146,8 @@ def get_portfolio(
                     pos["average_price"] = Decimal("0.00")
 
         elif op in ["dividend", "jcp", "rendimento"]:
-            pos["total_dividends"] += total_amt
+            if normalize_asset_class(asset_type) != "Renda Fixa":
+                pos["total_dividends"] += total_amt
 
     res = [PortfolioPosition(**p) for p in positions.values() if p["quantity"] > 0 or p["total_dividends"] > 0]
     return sorted(res, key=lambda x: x.total_invested, reverse=True)
@@ -409,7 +410,7 @@ def get_investment_summary(
 ):
     portfolio = get_portfolio(db, current_user)
     total_invested = sum(p.total_invested for p in portfolio)
-    total_dividends = sum(p.total_dividends for p in portfolio)
+    total_dividends = sum(p.total_dividends for p in portfolio if normalize_asset_class(p.asset_type) != 'Renda Fixa')
 
     now = datetime.utcnow()
     month_start = datetime(now.year, now.month, 1)
@@ -494,8 +495,10 @@ def get_dividends_by_period(
     seen_signatures = set()
 
     for tx, asset in inv_dividends:
-        amt = Decimal(str(tx.total_amount or 0))
         norm_type = normalize_asset_class(asset.asset_type)
+        if norm_type == "Renda Fixa":
+            continue
+        amt = Decimal(str(tx.total_amount or 0))
         dt_key = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else "no-date"
         seen_signatures.add((dt_key, round(float(amt), 2)))
 
@@ -530,7 +533,9 @@ def get_dividends_by_period(
 
         m = re.search(r"\b([A-Z]{4}[0-9]{1,2}[A-Z]?)\b", btx.description.upper())
         t_found = m.group(1) if m else "PROVENTO"
-        a_class = guess_asset_type(t_found) if m else "Ações"
+        a_class = normalize_asset_class(guess_asset_type(t_found) if m else "Ações")
+        if a_class == "Renda Fixa":
+            continue
 
         items.append(DividendItem(
             id=-btx.id,
@@ -577,7 +582,7 @@ def get_dividends_by_period(
         ))
     by_asset.sort(key=lambda x: x.total_amount, reverse=True)
 
-    by_class_dict = {c: Decimal("0.00") for c in ALLOWED_ASSET_CLASSES}
+    by_class_dict = {c: Decimal("0.00") for c in ALLOWED_ASSET_CLASSES if c != 'Renda Fixa'}
     for it in items:
         c = it.asset_type if it.asset_type in by_class_dict else "Ações"
         by_class_dict[c] += it.total_amount

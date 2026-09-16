@@ -2231,7 +2231,7 @@ export default function Home() {
 
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium uppercase tracking-wider">Proventos Recebidos</span>
+                <span className="text-xs font-medium uppercase tracking-wider">Proventos Recebidos (Renda Variável)</span>
                 <DollarSign className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="mt-3">
@@ -2239,7 +2239,7 @@ export default function Home() {
                   R$ {Number(invSummary?.total_dividends_received || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </span>
                 <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
-                  <span>Histórico Acumulado</span>
+                  <span>Acumulado (sem Renda Fixa)</span>
                   {dividendData && (
                     <span className="text-emerald-300 font-semibold font-mono">
                       No período: R$ {Number(dividendData.total_amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
@@ -2336,7 +2336,7 @@ export default function Home() {
                   <span>Visualização de Dividendos Recebidos por Período</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Acompanhe seus rendimentos e dividendos recebidos no período selecionado, consolidados por ativo e por classe.
+                  Acompanhe seus rendimentos e dividendos de renda variável recebidos no período selecionado (proventos de ativos de Renda Fixa desconsiderados).
                 </p>
               </div>
 
@@ -2403,17 +2403,16 @@ export default function Home() {
               </div>
 
               <div className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-xl">
-                <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Ações, Renda Fixa & Outros</span>
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Ações, Internacional & Criptos</span>
                 <div className="mt-2">
                   <span className="text-xl font-bold text-blue-300 font-mono">
                     R$ {(
                       Number(dividendData?.by_asset_class?.['Ações'] || 0) +
                       Number(dividendData?.by_asset_class?.['Internacional'] || 0) +
-                      Number(dividendData?.by_asset_class?.['Renda Fixa'] || 0) +
                       Number(dividendData?.by_asset_class?.['Criptos'] || 0)
                     ).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                   </span>
-                  <p className="text-[11px] text-slate-500 mt-1">Dividendos, JCP e proventos de ações</p>
+                  <p className="text-[11px] text-slate-500 mt-1">Dividendos e JCP (Renda Variável)</p>
                 </div>
               </div>
             </div>

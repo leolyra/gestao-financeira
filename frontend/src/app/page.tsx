@@ -23,6 +23,7 @@ import {
   UploadCloud,
   ArrowLeftRight,
   PieChart,
+  DollarSign,
   Sparkles,
   Bot,
   Target,
@@ -32,6 +33,14 @@ import {
   Download
 } from 'lucide-react';
 import { fetchWithAuth, setToken, getToken, removeToken } from '@/lib/api';
+
+const ASSET_CLASSES = [
+  'Ações',
+  'Fundos Imobiliários',
+  'Internacional',
+  'Renda Fixa',
+  'Criptos'
+];
 
 const PERIOD_OPTIONS = [
   { label: 'Mês atual', value: 'current_month' },
@@ -83,6 +92,41 @@ interface Transaction {
   account_name?: string;
   cost_type?: 'fixa' | 'variavel';
   is_accounted?: boolean;
+}
+
+interface DividendItem {
+  id: number;
+  trade_date: string;
+  ticker: string;
+  asset_name: string;
+  asset_type: string;
+  operation_type: string;
+  total_amount: number;
+  quantity?: number;
+  unit_price?: number;
+  source: string;
+  notes?: string;
+}
+
+interface DividendAssetBreakdown {
+  ticker: string;
+  asset_name: string;
+  asset_type: string;
+  total_amount: number;
+  percentage: number;
+  events_count: number;
+}
+
+interface DividendPeriodResponse {
+  period: string;
+  period_label: string;
+  start_date?: string;
+  end_date?: string;
+  total_amount: number;
+  events_count: number;
+  by_asset: DividendAssetBreakdown[];
+  by_asset_class: Record<string, number>;
+  items: DividendItem[];
 }
 
 interface PortfolioPosition {
@@ -238,6 +282,12 @@ export default function Home() {
   const [diagnosticsData, setDiagnosticsData] = useState<any>(null);
   const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
   const [invSummary, setInvSummary] = useState<InvestmentSummary | null>(null);
+  const [dividendPeriod, setDividendPeriod] = useState<string>('current_month');
+  const [dividendData, setDividendData] = useState<DividendPeriodResponse | null>(null);
+  const [isLoadingDividends, setIsLoadingDividends] = useState<boolean>(false);
+  const [custodiaClassFilter, setCustodiaClassFilter] = useState<string>('all');
+  const [invAssetClass, setInvAssetClass] = useState<string>('Ações');
+
 
   // Modais de Investimento
   const [showSinacorModal, setShowSinacorModal] = useState(false);
@@ -309,7 +359,7 @@ export default function Home() {
 
   async function loadAllData() {
     try {
-      const [meRes, accRes, catRes, txRes, sumRes, portRes, invTxRes, invSumRes] = await Promise.all([
+      const [meRes, accRes, catRes, txRes, sumRes, portRes, invTxRes, invSumRes, divRes] = await Promise.all([
         fetchWithAuth('/auth/me'),
         fetchWithAuth('/accounts/'),
         fetchWithAuth(`/categories/?period=${categoryPeriod}`),
@@ -317,12 +367,14 @@ export default function Home() {
         fetchWithAuth(`/transactions/summary?period=${dashboardPeriod}`),
         fetchWithAuth('/investments/portfolio'),
         fetchWithAuth('/investments/transactions'),
-        fetchWithAuth('/investments/summary')
+        fetchWithAuth('/investments/summary'),
+        fetchWithAuth(`/investments/dividends?period=${dividendPeriod}`)
       ]);
 
       if (portRes.ok) setPortfolio(await portRes.json());
       if (invTxRes.ok) setInvTransactions(await invTxRes.json());
       if (invSumRes.ok) setInvSummary(await invSumRes.json());
+      if (divRes.ok) setDividendData(await divRes.json());
 
       const [alertsRes, reportsRes] = await Promise.all([
         fetchWithAuth('/monitoring/rules'),
@@ -491,6 +543,39 @@ export default function Home() {
   }
 
   // Funções de Investimentos
+  async function fetchDividends(period: string) {
+    setDividendPeriod(period);
+    setIsLoadingDividends(true);
+    try {
+      const res = await fetchWithAuth(`/investments/dividends?period=${period}`);
+      if (res.ok) {
+        setDividendData(await res.json());
+      }
+    } catch (err) {
+      console.error("Erro ao buscar dividendos:", err);
+    } finally {
+      setIsLoadingDividends(false);
+    }
+  }
+
+  async function handleUpdateAssetClass(assetId: number, newClass: string) {
+    try {
+      const res = await fetchWithAuth(`/investments/assets/${assetId}/classification`, {
+        method: 'PATCH',
+        body: JSON.stringify({ asset_type: newClass })
+      });
+      if (res.ok) {
+        setPortfolio(prev => prev.map(pos => pos.asset_id === assetId ? { ...pos, asset_type: newClass } : pos));
+        fetchDividends(dividendPeriod);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Erro ao atualizar classificação: ${err.detail || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Erro de conexão ao atualizar classificação: ${err.message}`);
+    }
+  }
+
   async function handleCreateManualInvestment(e: React.FormEvent) {
     e.preventDefault();
     if (!invTicker) return;
@@ -506,6 +591,7 @@ export default function Home() {
         body: JSON.stringify({
           ticker: invTicker.toUpperCase().trim(),
           operation_type: invOpType,
+          asset_type: invAssetClass,
           quantity: q,
           unit_price: p,
           costs: c,
@@ -2130,7 +2216,7 @@ export default function Home() {
         <section className="mt-6 space-y-6">
           {/* Cards de Métricas de Investimento */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
               <div className="flex justify-between items-center text-slate-400">
                 <span className="text-xs font-medium uppercase tracking-wider">Patrimônio em Custódia</span>
                 <PieChart className="w-4 h-4 text-emerald-400" />
@@ -2143,20 +2229,27 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
               <div className="flex justify-between items-center text-slate-400">
                 <span className="text-xs font-medium uppercase tracking-wider">Proventos Recebidos</span>
-                <ArrowUpRight className="w-4 h-4 text-indigo-400" />
+                <DollarSign className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="mt-3">
-                <span className="text-2xl font-bold text-indigo-400">
+                <span className="text-2xl font-bold text-emerald-400">
                   R$ {Number(invSummary?.total_dividends_received || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                 </span>
-                <p className="text-[11px] text-slate-500 mt-1">Dividendos, JCP e Rendimentos</p>
+                <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
+                  <span>Histórico Acumulado</span>
+                  {dividendData && (
+                    <span className="text-emerald-300 font-semibold font-mono">
+                      No período: R$ {Number(dividendData.total_amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
               <div className="flex justify-between items-center text-slate-400">
                 <span className="text-xs font-medium uppercase tracking-wider">Ganho de Capital (Mês)</span>
                 <TrendingUp className="w-4 h-4 text-amber-400" />
@@ -2169,7 +2262,7 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
               <div className="flex justify-between items-center text-slate-400">
                 <span className="text-xs font-medium uppercase tracking-wider">Ações de Importação</span>
                 <UploadCloud className="w-4 h-4 text-blue-400" />
@@ -2189,7 +2282,7 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Mensagem de Feedback de Upload */}
+          {/* Feedback de Upload / Mensagens */}
           {invUploadMsg && (
             <div className="p-3 bg-indigo-950/60 border border-indigo-800/50 rounded-xl text-xs text-indigo-200 flex justify-between items-center">
               <span>{invUploadMsg}</span>
@@ -2234,126 +2327,427 @@ export default function Home() {
             </div>
           )}
 
-          {/* Botão para Nova Operação Manual */}
-          <div className="flex justify-between items-center">
-            <h3 className="text-sm font-semibold text-white">Custódia Consolidada da Carteira</h3>
-            <button
-              onClick={() => setShowManualInvModal(!showManualInvModal)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-lg text-xs font-medium transition"
-            >
-              <PlusCircle className="w-3.5 h-3.5 text-indigo-400" /> Nova Operação Manual
-            </button>
+          {/* SEÇÃO 2: PROVENTOS & DIVIDENDOS RECEBIDOS POR PERÍODO */}
+          <div className="p-6 bg-slate-900 border border-slate-800 rounded-xl space-y-5">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <DollarSign className="w-5 h-5 text-emerald-400" />
+                  <span>Visualização de Dividendos Recebidos por Período</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Acompanhe seus rendimentos e dividendos recebidos no período selecionado, consolidados por ativo e por classe.
+                </p>
+              </div>
+
+              {/* Filtro de Período Padronizado */}
+              <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1.5 rounded-lg border border-slate-800">
+                {PERIOD_OPTIONS.map((p) => (
+                  <button
+                    key={p.value}
+                    type="button"
+                    onClick={() => fetchDividends(p.value)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition ${
+                      dividendPeriod === p.value
+                        ? 'bg-emerald-600 text-white shadow font-semibold'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Cards Resumo do Período Selecionado */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-xl">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">
+                  Total Recebido ({getPeriodLabel(dividendPeriod)})
+                </span>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <span className="text-2xl font-black text-emerald-400 font-mono">
+                    R$ {Number(dividendData?.total_amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {dividendData?.events_count || 0} lançamentos no período
+                </p>
+              </div>
+
+              <div className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-xl">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Maior Pagador</span>
+                <div className="mt-2">
+                  {dividendData?.by_asset && dividendData.by_asset.length > 0 ? (
+                    <div>
+                      <span className="text-lg font-bold text-white font-mono">{dividendData.by_asset[0].ticker}</span>
+                      <span className="text-xs text-slate-400 ml-2">({dividendData.by_asset[0].percentage}%)</span>
+                      <div className="text-sm font-semibold text-emerald-400 font-mono mt-0.5">
+                        R$ {Number(dividendData.by_asset[0].total_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-500 italic">Sem proventos no período</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-xl">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Fundos Imobiliários</span>
+                <div className="mt-2">
+                  <span className="text-xl font-bold text-emerald-300 font-mono">
+                    R$ {Number(dividendData?.by_asset_class?.['Fundos Imobiliários'] || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </span>
+                  <p className="text-[11px] text-slate-500 mt-1">Rendimentos mensais de FIIs</p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-950/80 border border-slate-800/80 rounded-xl">
+                <span className="text-xs text-slate-400 uppercase tracking-wider font-semibold">Ações, Renda Fixa & Outros</span>
+                <div className="mt-2">
+                  <span className="text-xl font-bold text-blue-300 font-mono">
+                    R$ {(
+                      Number(dividendData?.by_asset_class?.['Ações'] || 0) +
+                      Number(dividendData?.by_asset_class?.['Internacional'] || 0) +
+                      Number(dividendData?.by_asset_class?.['Renda Fixa'] || 0) +
+                      Number(dividendData?.by_asset_class?.['Criptos'] || 0)
+                    ).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </span>
+                  <p className="text-[11px] text-slate-500 mt-1">Dividendos, JCP e proventos de ações</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Consolidação de Proventos por Ativo */}
+            {dividendData?.by_asset && dividendData.by_asset.length > 0 ? (
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <h4 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                    Consolidação por Ativo no Período ({getPeriodLabel(dividendPeriod)})
+                  </h4>
+                  <span className="text-xs text-slate-400 font-mono">{dividendData.by_asset.length} ativos geraram renda</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {dividendData.by_asset.map((ast) => (
+                    <div key={ast.ticker} className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white font-mono text-sm">{ast.ticker}</span>
+                          <span className={`px-1.5 py-0.2 rounded text-[10px] font-medium border ${
+                            ast.asset_type === 'Ações' ? 'bg-blue-500/10 text-blue-300 border-blue-500/20' :
+                            ast.asset_type === 'Fundos Imobiliários' ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' :
+                            ast.asset_type === 'Internacional' ? 'bg-purple-500/10 text-purple-300 border-purple-500/20' :
+                            ast.asset_type === 'Renda Fixa' ? 'bg-amber-500/10 text-amber-300 border-amber-500/20' :
+                            'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
+                          }`}>
+                            {ast.asset_type}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 truncate max-w-[150px] mt-0.5">{ast.asset_name}</p>
+                        <span className="text-[10px] text-slate-500">{ast.events_count} {ast.events_count === 1 ? 'pagamento' : 'pagamentos'}</span>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-emerald-400 font-mono text-sm">
+                          R$ {Number(ast.total_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </div>
+                        <div className="text-[11px] font-semibold text-slate-400 font-mono mt-0.5">
+                          {ast.percentage}%
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="p-6 text-center bg-slate-950/40 border border-dashed border-slate-800 rounded-xl text-slate-500 text-xs">
+                Nenhum provento ou dividendo registrado no período selecionado ({getPeriodLabel(dividendPeriod)}).
+              </div>
+            )}
+
+            {/* Extrato Detalhado de Proventos do Período */}
+            {dividendData?.items && dividendData.items.length > 0 && (
+              <div className="border border-slate-800 rounded-xl overflow-hidden mt-4">
+                <div className="p-3 bg-slate-950 border-b border-slate-800 flex justify-between items-center">
+                  <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                    Extrato de Proventos do Período ({dividendData.items.length} lançamentos)
+                  </span>
+                  <span className="text-xs text-emerald-400 font-mono font-semibold">
+                    Total: R$ {Number(dividendData.total_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950/90 text-slate-400 uppercase tracking-wider border-b border-slate-800 sticky top-0">
+                      <tr>
+                        <th className="py-2.5 px-4">Data</th>
+                        <th className="py-2.5 px-4">Ticker</th>
+                        <th className="py-2.5 px-4">Classe</th>
+                        <th className="py-2.5 px-4">Tipo</th>
+                        <th className="py-2.5 px-4 text-right">Qtd</th>
+                        <th className="py-2.5 px-4 text-right">Unitário</th>
+                        <th className="py-2.5 px-4 text-right">Valor Líquido</th>
+                        <th className="py-2.5 px-4">Origem</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {dividendData.items.map((it) => (
+                        <tr key={it.id} className="hover:bg-slate-800/40 transition">
+                          <td className="py-2.5 px-4 whitespace-nowrap text-slate-400 font-mono">
+                            {new Date(it.trade_date).toLocaleDateString('pt-BR')}
+                          </td>
+                          <td className="py-2.5 px-4 font-bold text-white font-mono">{it.ticker}</td>
+                          <td className="py-2.5 px-4 text-[11px] text-slate-300">{it.asset_type}</td>
+                          <td className="py-2.5 px-4">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              {it.operation_type}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono text-slate-400">
+                            {Number(it.quantity) > 0 ? Number(it.quantity).toLocaleString('pt-BR') : '-'}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-mono text-slate-400">
+                            {Number(it.unit_price) > 0 ? `R$ ${Number(it.unit_price).toFixed(2)}` : '-'}
+                          </td>
+                          <td className="py-2.5 px-4 text-right font-bold text-emerald-400 font-mono">
+                            R$ {Number(it.total_amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="py-2.5 px-4 text-[10px] text-slate-400">
+                            {it.source}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Form Operação Manual */}
-          {showManualInvModal && (
-            <form onSubmit={handleCreateManualInvestment} className="p-4 bg-slate-900 border border-slate-800 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-              <input
-                type="text"
-                placeholder="Ticker (ex: PETR4, BBAS3)"
-                value={invTicker}
-                onChange={(e) => setInvTicker(e.target.value)}
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
-                required
-              />
-              <select
-                value={invOpType}
-                onChange={(e) => setInvOpType(e.target.value)}
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
-              >
-                <option value="buy">Compra</option>
-                <option value="sell">Venda</option>
-                <option value="dividend">Dividendo</option>
-                <option value="jcp">Juros s/ Cap. Próprio (JCP)</option>
-                <option value="rendimento">Rendimento FII</option>
-              </select>
-              <input
-                type="number"
-                step="any"
-                placeholder="Quantidade"
-                value={invQty}
-                onChange={(e) => setInvQty(e.target.value)}
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
-                required
-              />
-              <input
-                type="number"
-                step="0.01"
-                placeholder="Preço Unitário (R$)"
-                value={invUnitPrice}
-                onChange={(e) => setInvUnitPrice(e.target.value)}
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
-                required
-              />
-              <input
-                type="number"
-                step="0.01"
-                placeholder="Custos / Taxas (R$)"
-                value={invCosts}
-                onChange={(e) => setInvCosts(e.target.value)}
-                className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
-              />
+          {/* SEÇÃO 3: CUSTÓDIA CONSOLIDADA & CLASSIFICAÇÃO DOS ATIVOS */}
+          <div className="space-y-4">
+            {/* Header da Custódia com botão Nova Operação */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <PieChart className="w-5 h-5 text-indigo-400" />
+                  <span>Custódia Consolidada da Carteira</span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Gerencie seus ativos, posições, preço médio e classifique cada ativo em Ações, FIIs, Internacional, Renda Fixa ou Criptos.
+                </p>
+              </div>
               <button
-                type="submit"
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition"
+                onClick={() => setShowManualInvModal(!showManualInvModal)}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 border border-indigo-500/30 text-white rounded-lg text-xs font-semibold shadow-sm transition"
               >
-                Salvar Operação
+                <PlusCircle className="w-4 h-4" /> Nova Operação Manual
               </button>
-            </form>
-          )}
+            </div>
 
-          {/* Tabela de Custódia */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm text-slate-300">
-                <thead className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
-                  <tr>
-                    <th className="py-3 px-4">Ticker</th>
-                    <th className="py-3 px-4">Ativo</th>
-                    <th className="py-3 px-4">Tipo</th>
-                    <th className="py-3 px-4 text-right">Qtd</th>
-                    <th className="py-3 px-4 text-right">Preço Médio</th>
-                    <th className="py-3 px-4 text-right">Total Investido</th>
-                    <th className="py-3 px-4 text-right">Proventos</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60">
-                  {portfolio.map((pos) => (
-                    <tr key={pos.asset_id} className="hover:bg-slate-800/30 transition">
-                      <td className="py-3 px-4 font-bold text-white font-mono">{pos.ticker}</td>
-                      <td className="py-3 px-4 text-xs text-slate-300">{pos.name}</td>
-                      <td className="py-3 px-4 text-xs">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-300 border border-slate-700">
-                          {pos.asset_type}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-right text-xs font-mono">{Number(pos.quantity).toLocaleString('pt-BR')}</td>
-                      <td className="py-3 px-4 text-right text-xs font-mono">R$ {Number(pos.average_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                      <td className="py-3 px-4 text-right text-xs font-bold text-white font-mono">
-                        R$ {Number(pos.total_invested).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </td>
-                      <td className="py-3 px-4 text-right text-xs font-semibold text-emerald-400 font-mono">
-                        R$ {Number(pos.total_dividends).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                      </td>
-                    </tr>
+            {/* Distribuição de Patrimônio por Classe de Ativos */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              {ASSET_CLASSES.map((cls) => {
+                const totalInClass = portfolio
+                  .filter(p => p.asset_type === cls)
+                  .reduce((acc, p) => acc + Number(p.total_invested || 0), 0);
+                const totalPortfolio = portfolio.reduce((acc, p) => acc + Number(p.total_invested || 0), 0);
+                const pct = totalPortfolio > 0 ? (totalInClass / totalPortfolio) * 100 : 0;
+                
+                return (
+                  <div key={cls} className="p-3.5 bg-slate-900 border border-slate-800 rounded-xl">
+                    <div className="flex justify-between items-center text-xs text-slate-400 mb-1">
+                      <span className="font-semibold truncate">{cls}</span>
+                      <span className="font-bold text-slate-200 font-mono">{pct.toFixed(1)}%</span>
+                    </div>
+                    <div className="text-sm font-black text-white font-mono">
+                      R$ {totalInClass.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                    </div>
+                    <div className="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
+                      <div 
+                        className={`h-full rounded-full ${
+                          cls === 'Ações' ? 'bg-blue-500' :
+                          cls === 'Fundos Imobiliários' ? 'bg-emerald-500' :
+                          cls === 'Internacional' ? 'bg-purple-500' :
+                          cls === 'Renda Fixa' ? 'bg-amber-500' : 'bg-cyan-500'
+                        }`}
+                        style={{ width: `${Math.min(pct, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Form Operação Manual (se aberto) */}
+            {showManualInvModal && (
+              <form onSubmit={handleCreateManualInvestment} className="p-4 bg-slate-900 border border-slate-800 rounded-xl grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-7 gap-3">
+                <input
+                  type="text"
+                  placeholder="Ticker (ex: PETR4, BBAS3)"
+                  value={invTicker}
+                  onChange={(e) => setInvTicker(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white uppercase font-mono"
+                  required
+                />
+                <select
+                  value={invOpType}
+                  onChange={(e) => setInvOpType(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                >
+                  <option value="buy">Compra</option>
+                  <option value="sell">Venda</option>
+                  <option value="dividend">Dividendo</option>
+                  <option value="jcp">JCP</option>
+                  <option value="rendimento">Rendimento FII</option>
+                </select>
+                <select
+                  value={invAssetClass}
+                  onChange={(e) => setInvAssetClass(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                  title="Classificação do Ativo"
+                >
+                  {ASSET_CLASSES.map((cls) => (
+                    <option key={cls} value={cls}>{cls}</option>
                   ))}
-                  {portfolio.length === 0 && (
+                </select>
+                <input
+                  type="number"
+                  step="any"
+                  placeholder="Quantidade"
+                  value={invQty}
+                  onChange={(e) => setInvQty(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                  required
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Preço Unit. (R$)"
+                  value={invUnitPrice}
+                  onChange={(e) => setInvUnitPrice(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                  required
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Taxas (R$)"
+                  value={invCosts}
+                  onChange={(e) => setInvCosts(e.target.value)}
+                  className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg transition"
+                >
+                  Salvar
+                </button>
+              </form>
+            )}
+
+            {/* Barra de Filtro de Classe para a Tabela de Custódia */}
+            <div className="flex flex-wrap items-center gap-1.5 p-3 bg-slate-900 border border-slate-800 rounded-xl">
+              <span className="text-xs font-semibold text-slate-400 mr-2">Filtrar Custódia:</span>
+              <button
+                type="button"
+                onClick={() => setCustodiaClassFilter('all')}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                  custodiaClassFilter === 'all'
+                    ? 'bg-indigo-600 text-white shadow font-semibold'
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                }`}
+              >
+                Todos ({portfolio.length})
+              </button>
+              {ASSET_CLASSES.map((cls) => {
+                const count = portfolio.filter(p => p.asset_type === cls).length;
+                return (
+                  <button
+                    key={cls}
+                    type="button"
+                    onClick={() => setCustodiaClassFilter(cls)}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition ${
+                      custodiaClassFilter === cls
+                        ? 'bg-indigo-600 text-white shadow font-semibold'
+                        : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
+                    }`}
+                  >
+                    {cls} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Tabela de Custódia com Dropdown Interativo de Classificação */}
+            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm text-slate-300">
+                  <thead className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
-                        Nenhum ativo em carteira. Importe uma nota de corretagem em PDF (Sinacor) ou registre operações manuais.
-                      </td>
+                      <th className="py-3 px-4">Ticker</th>
+                      <th className="py-3 px-4">Ativo</th>
+                      <th className="py-3 px-4">Classificação (Opção de Troca)</th>
+                      <th className="py-3 px-4 text-right">Qtd</th>
+                      <th className="py-3 px-4 text-right">Preço Médio</th>
+                      <th className="py-3 px-4 text-right">Total Investido</th>
+                      <th className="py-3 px-4 text-right">Proventos Totais</th>
                     </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {portfolio
+                      .filter(pos => custodiaClassFilter === 'all' || pos.asset_type === custodiaClassFilter)
+                      .map((pos) => (
+                        <tr key={pos.asset_id} className="hover:bg-slate-800/30 transition">
+                          <td className="py-3 px-4 font-bold text-white font-mono">{pos.ticker}</td>
+                          <td className="py-3 px-4 text-xs text-slate-300">{pos.name}</td>
+                          <td className="py-3 px-4 text-xs">
+                            <select
+                              value={pos.asset_type || 'Ações'}
+                              onChange={(e) => handleUpdateAssetClass(pos.asset_id, e.target.value)}
+                              className={`px-2.5 py-1 rounded-md text-xs font-semibold border cursor-pointer focus:outline-none transition ${
+                                pos.asset_type === 'Ações' ? 'bg-blue-950/70 text-blue-300 border-blue-500/30' :
+                                pos.asset_type === 'Fundos Imobiliários' ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/30' :
+                                pos.asset_type === 'Internacional' ? 'bg-purple-950/70 text-purple-300 border-purple-500/30' :
+                                pos.asset_type === 'Renda Fixa' ? 'bg-amber-950/70 text-amber-300 border-amber-500/30' :
+                                'bg-cyan-950/70 text-cyan-300 border-cyan-500/30'
+                              }`}
+                              title="Selecione para alterar a classificação do ativo"
+                            >
+                              {ASSET_CLASSES.map((cls) => (
+                                <option key={cls} value={cls} className="bg-slate-900 text-white font-sans">
+                                  {cls}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="py-3 px-4 text-right text-xs font-mono">{Number(pos.quantity).toLocaleString('pt-BR')}</td>
+                          <td className="py-3 px-4 text-right text-xs font-mono">R$ {Number(pos.average_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                          <td className="py-3 px-4 text-right text-xs font-bold text-white font-mono">
+                            R$ {Number(pos.total_invested).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </td>
+                          <td className="py-3 px-4 text-right text-xs font-semibold text-emerald-400 font-mono">
+                            R$ {Number(pos.total_dividends).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      ))}
+                    {portfolio.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
+                          Nenhum ativo em carteira. Importe uma nota de corretagem em PDF (Sinacor) ou registre operações manuais.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
-          {/* Histórico Recente de Operações */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          {/* SEÇÃO 4: HISTÓRICO DE OPERAÇÕES */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm">
             <div className="p-4 border-b border-slate-800 flex justify-between items-center">
-              <h3 className="text-sm font-semibold text-white">Histórico de Operações e Proventos</h3>
-              <span className="text-xs text-slate-400">{invTransactions.length} registros</span>
+              <h3 className="text-sm font-semibold text-white">Histórico Geral de Operações (Compras, Vendas e Proventos)</h3>
+              <span className="text-xs text-slate-400 font-mono">{invTransactions.length} registros</span>
             </div>
             <div className="overflow-x-auto max-h-80 overflow-y-auto">
               <table className="w-full text-left text-xs text-slate-300">
@@ -2361,6 +2755,7 @@ export default function Home() {
                   <tr>
                     <th className="py-2.5 px-4">Data</th>
                     <th className="py-2.5 px-4">Ticker</th>
+                    <th className="py-2.5 px-4">Classe</th>
                     <th className="py-2.5 px-4">Operação</th>
                     <th className="py-2.5 px-4 text-right">Qtd</th>
                     <th className="py-2.5 px-4 text-right">Preço Unit.</th>
@@ -2372,10 +2767,11 @@ export default function Home() {
                 <tbody className="divide-y divide-slate-800/60">
                   {invTransactions.map((tx) => (
                     <tr key={tx.id} className="hover:bg-slate-800/30">
-                      <td className="py-2.5 px-4 whitespace-nowrap text-slate-400">
+                      <td className="py-2.5 px-4 whitespace-nowrap text-slate-400 font-mono">
                         {new Date(tx.trade_date).toLocaleDateString('pt-BR')}
                       </td>
                       <td className="py-2.5 px-4 font-bold text-white font-mono">{tx.ticker}</td>
+                      <td className="py-2.5 px-4 text-[11px] text-slate-400">{tx.asset_type}</td>
                       <td className="py-2.5 px-4">
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
                           tx.operation_type === 'buy' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :

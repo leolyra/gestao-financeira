@@ -45,16 +45,33 @@ def guess_ticker(spec_text: str) -> str:
     return "ATIVO3"
 
 def guess_asset_type(ticker: str) -> str:
-    t = ticker.upper()
+    t = (ticker or "").upper().strip()
+    
+    # Criptoativos
+    crypto_list = ["BTC", "ETH", "SOL", "USDT", "HASH11", "QBTC11", "BITI11", "CRPT11", "ETHE11", "BITH11", "WEB311"]
+    if any(c in t for c in crypto_list) or t.startswith("CRIPTO") or t.endswith("USD"):
+        return "Criptos"
+    
+    # Internacional (BDRs e ETFs internacionais)
+    intl_etfs = ["IVVB11", "SPXI11", "NASD11", "ACWI11", "WRLD11", "EURP11", "XINA11", "ASIA11", "DNAI11", "TECK11", "GOLD11"]
+    if t.endswith("34") or t.endswith("35") or t.endswith("39") or any(etf in t for etf in intl_etfs):
+        return "Internacional"
+    
+    # Renda Fixa (ETFs de renda fixa, títulos, debêntures)
+    rf_etfs = ["B5P211", "IMAB11", "AREA11", "AUPO11", "IB5M11", "KDIF11", "LFTS11", "FIXA11", "IRFM11"]
+    rf_keywords = ["TESOURO", "CDB", "LCI", "LCA", "DEB", "CRI", "CRA", "SELIC", "IPCA", "PRE"]
+    if any(rf in t for rf in rf_etfs) or any(kw in t for kw in rf_keywords):
+        return "Renda Fixa"
+    
+    # Fundos Imobiliários (FIIs e Fiagros - normalmente terminados em 11 que não sejam ETFs/Criptos)
     if t.endswith("11"):
-        if any(etf in t for etf in ["BOVA11", "IVVB11", "SMAL11", "B5P211", "IMAB11", "AREA11", "AUPO11"]):
-            return "ETF"
-        return "FII"
-    elif t.endswith("34") or t.endswith("35") or t.endswith("39"):
-        return "BDR"
-    elif t.endswith("3") or t.endswith("4") or t.endswith("5") or t.endswith("6"):
-        return "Ação"
-    return "Renda Fixa"
+        return "Fundos Imobiliários"
+    
+    # Ações brasileiras (terminações 3, 4, 5, 6, ou frações 3F, 4F)
+    if any(t.endswith(suffix) for suffix in ["3", "4", "5", "6", "3F", "4F", "1", "2"]):
+        return "Ações"
+        
+    return "Ações"
 
 def parse_sinacor_pdf(file_bytes: bytes) -> Dict[str, Any]:
     operations = []

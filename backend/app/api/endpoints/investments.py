@@ -1,39 +1,102 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
 from decimal import Decimal
 import pandas as pd
 import io
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+import re
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.core.database import get_db
-from app.models.entities import Asset, AssetTickerHistory, InvestmentTransaction, User
+from app.models.entities import Asset, AssetTickerHistory, InvestmentTransaction, User, Transaction, Account, Category
 from app.schemas.investment import (
     InvestmentTransactionCreate,
     InvestmentTransactionResponse,
     PortfolioPosition,
+    AssetClassificationUpdate,
     TickerMigrationRequest,
     TickerMigrationResponse,
-    InvestmentSummary
+    InvestmentSummary,
+    DividendPeriodResponse,
+    DividendItem,
+    DividendAssetBreakdown
 )
 from app.services.sinacor_parser import parse_sinacor_pdf, guess_asset_type
+from app.services.categorizer import resolve_date_range
 from app.api.deps import get_current_user
 
 router = APIRouter(prefix="/investments", tags=["investments"])
 
+ALLOWED_ASSET_CLASSES = [
+    "Ações",
+    "Fundos Imobiliários",
+    "Internacional",
+    "Renda Fixa",
+    "Criptos"
+]
+
+def normalize_asset_class(raw_class: Optional[str]) -> str:
+    if not raw_class:
+        return "Ações"
+    rc = raw_class.strip().lower()
+    if rc in ["ação", "acoes", "ações", "acao", "stock", "stocks", "equity"]:
+        return "Ações"
+    elif rc in ["fii", "fiis", "fundo imobiliario", "fundos imobiliarios", "fundos imobiliários", "fiagro"]:
+        return "Fundos Imobiliários"
+    elif rc in ["bdr", "bdrs", "internacional", "global", "etf internacional", "exterior"]:
+        return "Internacional"
+    elif rc in ["renda fixa", "renda_fixa", "tesouro", "cdb", "lci", "lca", "etf renda fixa"]:
+        return "Renda Fixa"
+    elif rc in ["cripto", "criptos", "criptomoeda", "criptomoedas", "crypto", "btc"]:
+        return "Criptos"
+    elif rc in ["etf"]:
+        return "Ações"
+    for allowed in ALLOWED_ASSET_CLASSES:
+        if allowed.lower() == rc:
+            return allowed
+    return "Ações"
+
 def get_or_create_asset(ticker: str, name: Optional[str], asset_type: Optional[str], db: Session) -> Asset:
     clean_ticker = ticker.upper().strip()
     asset = db.query(Asset).filter(Asset.ticker_current == clean_ticker).first()
+    normalized_type = normalize_asset_class(asset_type) if asset_type else guess_asset_type(clean_ticker)
+    
     if not asset:
         asset = Asset(
             ticker_current=clean_ticker,
             name=name or clean_ticker,
-            asset_type=asset_type or guess_asset_type(clean_ticker)
+            asset_type=normalized_type
         )
         db.add(asset)
         db.commit()
         db.refresh(asset)
+    elif asset_type:
+        asset.asset_type = normalized_type
+        db.commit()
+        db.refresh(asset)
     return asset
+
+@router.patch("/assets/{asset_id}/classification")
+def update_asset_classification(
+    asset_id: int,
+    payload: AssetClassificationUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    asset = db.query(Asset).filter(Asset.id == asset_id).first()
+    if not asset:
+        raise HTTPException(status_code=404, detail="Ativo não encontrado.")
+    
+    norm = normalize_asset_class(payload.asset_type)
+    asset.asset_type = norm
+    db.commit()
+    db.refresh(asset)
+    return {
+        "status": "success",
+        "asset_id": asset.id,
+        "ticker": asset.ticker_current,
+        "asset_type": norm
+    }
 
 @router.get("/portfolio", response_model=List[PortfolioPosition])
 def get_portfolio(
@@ -53,7 +116,7 @@ def get_portfolio(
                 "asset_id": tx.asset_id,
                 "ticker": ticker,
                 "name": asset_name,
-                "asset_type": asset_type,
+                "asset_type": normalize_asset_class(asset_type),
                 "quantity": Decimal("0"),
                 "total_invested": Decimal("0.00"),
                 "average_price": Decimal("0.00"),
@@ -117,7 +180,7 @@ def list_investment_transactions(
             asset_id=tx.asset_id,
             ticker=t_code,
             asset_name=a_name,
-            asset_type=a_type,
+            asset_type=normalize_asset_class(a_type),
             operation_type=tx.operation_type,
             quantity=tx.quantity,
             unit_price=tx.unit_price,
@@ -136,7 +199,7 @@ def create_investment_transaction(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    asset = get_or_create_asset(tx_in.ticker, None, None, db)
+    asset = get_or_create_asset(tx_in.ticker, None, tx_in.asset_type, db)
 
     tx = InvestmentTransaction(
         user_id=current_user.id,
@@ -159,7 +222,7 @@ def create_investment_transaction(
         asset_id=asset.id,
         ticker=asset.ticker_current,
         asset_name=asset.name,
-        asset_type=asset.asset_type,
+        asset_type=normalize_asset_class(asset.asset_type),
         operation_type=tx.operation_type,
         quantity=tx.quantity,
         unit_price=tx.unit_price,
@@ -245,6 +308,7 @@ async def upload_spreadsheet(
     col_price = next((c for c in df.columns if "preço" in c or "preco" in c or "unit" in c), None)
     col_total = next((c for c in df.columns if "total" in c or "valor" in c), None)
     col_costs = next((c for c in df.columns if "taxa" in c or "custo" in c), None)
+    col_class = next((c for c in df.columns if "classe" in c or "classif" in c or "categoria" in c), None)
 
     if not col_ticker or not col_qty:
         raise HTTPException(status_code=400, detail="A planilha precisa conter ao menos as colunas Ticker e Quantidade.")
@@ -269,6 +333,8 @@ async def upload_spreadsheet(
                 op_type = "dividend"
             elif "jcp" in op_str:
                 op_type = "jcp"
+            elif "rend" in op_str:
+                op_type = "rendimento"
 
         row_date = datetime.utcnow()
         if col_date and pd.notna(row[col_date]):
@@ -277,7 +343,9 @@ async def upload_spreadsheet(
             except Exception:
                 row_date = datetime.utcnow()
 
-        asset = get_or_create_asset(ticker_val, None, None, db)
+        custom_class = str(row[col_class]).strip() if col_class and pd.notna(row[col_class]) else None
+        asset = get_or_create_asset(ticker_val, None, custom_class, db)
+        
         tx = InvestmentTransaction(
             user_id=current_user.id,
             asset_id=asset.id,
@@ -366,4 +434,162 @@ def get_investment_summary(
         monthly_capital_gain=monthly_gain,
         total_dividends_received=total_dividends,
         positions_count=len([p for p in portfolio if p.quantity > 0])
+    )
+
+PERIOD_LABELS = {
+    "current_month": "Mês atual",
+    "30d": "30 dias",
+    "previous_month": "Mês anterior",
+    "60d": "60 dias",
+    "90d": "90 dias",
+    "current_year": "Esse ano",
+    "12m": "Últimos 12 meses",
+    "all": "Todo o Histórico"
+}
+
+@router.get("/dividends", response_model=DividendPeriodResponse)
+def get_dividends_by_period(
+    period: Optional[str] = Query("current_month"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    p_code = (period or "current_month").lower().strip()
+    p_start, p_end = resolve_date_range(p_code)
+    p_label = PERIOD_LABELS.get(p_code, "Período Selecionado")
+
+    # 1. Proventos do módulo de investimentos (InvestmentTransaction)
+    inv_query = db.query(InvestmentTransaction, Asset)\
+        .join(Asset, InvestmentTransaction.asset_id == Asset.id)\
+        .filter(
+            InvestmentTransaction.user_id == current_user.id,
+            InvestmentTransaction.operation_type.in_(["dividend", "jcp", "rendimento"])
+        )
+
+    if p_start:
+        inv_query = inv_query.filter(InvestmentTransaction.trade_date >= p_start)
+    if p_end:
+        inv_query = inv_query.filter(InvestmentTransaction.trade_date <= p_end)
+
+    inv_dividends = inv_query.order_by(InvestmentTransaction.trade_date.desc()).all()
+
+    # 2. Proventos de extratos bancários (Transaction com categoria Proventos / Dividendos)
+    bank_query = db.query(Transaction)\
+        .join(Account, Transaction.account_id == Account.id)\
+        .outerjoin(Category, Transaction.category_id == Category.id)\
+        .filter(
+            Account.user_id == current_user.id,
+            (Category.name.ilike("%dividendo%") | Category.name.ilike("%provento%") | Transaction.description.ilike("%dividendo%") | Transaction.description.ilike("%jcp%") | Transaction.description.ilike("%rendimento b3%")),
+            Transaction.amount > 0,
+            Transaction.is_accounted.is_(True)
+        )
+
+    if p_start:
+        bank_query = bank_query.filter(Transaction.date >= p_start)
+    if p_end:
+        bank_query = bank_query.filter(Transaction.date <= p_end)
+
+    bank_txs = bank_query.order_by(Transaction.date.desc()).all()
+
+    items: List[DividendItem] = []
+    seen_signatures = set()
+
+    for tx, asset in inv_dividends:
+        amt = Decimal(str(tx.total_amount or 0))
+        norm_type = normalize_asset_class(asset.asset_type)
+        dt_key = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else "no-date"
+        seen_signatures.add((dt_key, round(float(amt), 2)))
+
+        op_display = "Dividendo"
+        if tx.operation_type.lower() == "jcp":
+            op_display = "JCP"
+        elif tx.operation_type.lower() == "rendimento":
+            op_display = "Rendimento FII"
+
+        src_display = "Nota Sinacor B3" if tx.source == "pdf_sinacor" else ("Planilha" if tx.source == "spreadsheet" else "Manual (Carteira)")
+
+        items.append(DividendItem(
+            id=tx.id,
+            trade_date=tx.trade_date,
+            ticker=asset.ticker_current,
+            asset_name=asset.name or asset.ticker_current,
+            asset_type=norm_type,
+            operation_type=op_display,
+            total_amount=amt,
+            quantity=Decimal(str(tx.quantity or 0)),
+            unit_price=Decimal(str(tx.unit_price or 0)),
+            source=src_display,
+            notes=tx.notes
+        ))
+
+    for btx in bank_txs:
+        b_amt = Decimal(str(btx.amount or 0))
+        b_dt = btx.date.strftime("%Y-%m-%d") if btx.date else "no-date"
+        sig = (b_dt, round(float(b_amt), 2))
+        if sig in seen_signatures:
+            continue
+
+        m = re.search(r"\b([A-Z]{4}[0-9]{1,2}[A-Z]?)\b", btx.description.upper())
+        t_found = m.group(1) if m else "PROVENTO"
+        a_class = guess_asset_type(t_found) if m else "Ações"
+
+        items.append(DividendItem(
+            id=-btx.id,
+            trade_date=btx.date,
+            ticker=t_found,
+            asset_name=btx.description,
+            asset_type=normalize_asset_class(a_class),
+            operation_type="Provento Bancário",
+            total_amount=b_amt,
+            quantity=Decimal("0"),
+            unit_price=Decimal("0"),
+            source="Extrato Bancário",
+            notes="Conta Corrente"
+        ))
+
+    items.sort(key=lambda x: x.trade_date, reverse=True)
+
+    total_amount = sum((it.total_amount for it in items), Decimal("0.00"))
+
+    by_asset_dict = {}
+    for it in items:
+        tk = it.ticker
+        if tk not in by_asset_dict:
+            by_asset_dict[tk] = {
+                "ticker": tk,
+                "asset_name": it.asset_name,
+                "asset_type": it.asset_type,
+                "total_amount": Decimal("0.00"),
+                "events_count": 0
+            }
+        by_asset_dict[tk]["total_amount"] += it.total_amount
+        by_asset_dict[tk]["events_count"] += 1
+
+    by_asset = []
+    for tk, d in by_asset_dict.items():
+        pct = float(d["total_amount"] / total_amount * 100) if total_amount > 0 else 0.0
+        by_asset.append(DividendAssetBreakdown(
+            ticker=tk,
+            asset_name=d["asset_name"],
+            asset_type=d["asset_type"],
+            total_amount=d["total_amount"],
+            percentage=round(pct, 1),
+            events_count=d["events_count"]
+        ))
+    by_asset.sort(key=lambda x: x.total_amount, reverse=True)
+
+    by_class_dict = {c: Decimal("0.00") for c in ALLOWED_ASSET_CLASSES}
+    for it in items:
+        c = it.asset_type if it.asset_type in by_class_dict else "Ações"
+        by_class_dict[c] += it.total_amount
+
+    return DividendPeriodResponse(
+        period=p_code,
+        period_label=p_label,
+        start_date=p_start,
+        end_date=p_end,
+        total_amount=total_amount,
+        events_count=len(items),
+        by_asset=by_asset,
+        by_asset_class=by_class_dict,
+        items=items
     )

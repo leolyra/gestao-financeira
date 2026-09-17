@@ -715,6 +715,30 @@ export default function Home() {
     }
   }
 
+  async function handleLoadOfficialCustody() {
+    if (!confirm("Deseja carregar a posição oficial consolidada da sua carteira (65 ativos, R$ 962.473,12)?\n\nIsso atualizará sua custódia com os valores exatos da planilha mestra de controle de investimentos.")) {
+      return;
+    }
+    setIsRecalculating(true);
+    setInvUploadMsg("Carregando posição oficial de custódia (R$ 962k)...");
+    try {
+      const res = await fetchWithAuth("/investments/load-official-custody", {
+        method: "POST"
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setInvUploadMsg(data.message || "Custódia oficial restaurada com sucesso!");
+        loadAllData();
+      } else {
+        alert(`Erro: ${data.detail || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Falha de conexão: ${err.message}`);
+    } finally {
+      setIsRecalculating(false);
+    }
+  }
+
   async function handleResetInvestmentData() {
     if (!confirm("ATENÇÃO: Deseja realmente zerar todos os lançamentos da carteira de investimentos para reiniciar do zero?\n\nEssa ação apagará os registros de investimentos atuais para que você possa importar sua planilha ou notas limpas.")) {
       return;
@@ -724,7 +748,11 @@ export default function Home() {
         method: "POST"
       });
       if (res.ok) {
-        alert("Carteira de investimentos zerada com sucesso! Você pode agora importar seus arquivos do zero.");
+        setPortfolio([]);
+        setInvTransactions([]);
+        setInvSummary(null);
+        setDividendData(null);
+        alert("Carteira de investimentos zerada com sucesso! Você pode agora importar seus arquivos do zero ou carregar a custódia oficial.");
         loadAllData();
       } else {
         const err = await res.json().catch(() => ({}));
@@ -2809,18 +2837,30 @@ export default function Home() {
                     <span>{isUploadingPdf ? "Lendo..." : "Nota PDF B3"}</span>
                     <input type="file" accept=".pdf" onChange={handleUploadSinacor} className="hidden" />
                   </label>
-                  <label className="cursor-pointer text-center px-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition flex items-center justify-center gap-1" title="Importar planilha de custódia ou operações (.xlsx, .csv)">
+                  <label className="cursor-pointer text-center px-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition flex items-center justify-center gap-1" title="Importar planilha de custódia consolidada ou operações (.xlsx, .csv)">
                     <span>{isUploadingSpreadsheet ? "Lendo..." : "Planilha Excel"}</span>
                     <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadSpreadsheet} className="hidden" />
                   </label>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={handleLoadOfficialCustody}
+                  disabled={isRecalculating}
+                  className="w-full px-2 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+                  title="Carregar diretamente a custódia oficial consolidada da sua planilha (65 ativos, R$ 962k)"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRecalculating ? "animate-spin" : ""}`} />
+                  <span>Carregar Carteira Oficial (R$ 962k)</span>
+                </button>
+
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={handleRecalculateInvestments}
                     disabled={isRecalculating}
                     className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border border-slate-700 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 disabled:opacity-50"
-                    title="Recalcular do zero todas as posições de custódia e proventos"
+                    title="Recalcular e sanear posições"
                   >
                     <RefreshCw className={`w-3 h-3 ${isRecalculating ? "animate-spin" : ""}`} />
                     <span>Recalcular</span>

@@ -108,82 +108,121 @@ def get_portfolio(
         .filter(InvestmentTransaction.user_id == current_user.id)\
         .order_by(InvestmentTransaction.trade_date.asc(), InvestmentTransaction.id.asc()).all()
 
-    # Mapeia se há transações de compra/venda normais vs snapshot da Open Finance
-    asset_trades_count = {}
-    for tx, _, _, _ in txs:
-        is_snapshot = "posição open finance" in (tx.notes or "").lower()
-        if tx.asset_id not in asset_trades_count:
-            asset_trades_count[tx.asset_id] = {"snapshot": 0, "trades": 0}
-        if is_snapshot:
-            asset_trades_count[tx.asset_id]["snapshot"] += 1
-        elif tx.operation_type.lower() in ["buy", "compra", "sell", "venda"]:
-            asset_trades_count[tx.asset_id]["trades"] += 1
-
-    positions = {}
-
+    by_asset = {}
     for tx, ticker, asset_name, asset_type in txs:
         if not ticker:
             continue
-
-        is_snapshot = "posição open finance" in (tx.notes or "").lower()
-        # Se existem transações individuais reais para este ativo, ignora o snapshot para não duplicar custódia
-        if is_snapshot and asset_trades_count[tx.asset_id]["trades"] > 0:
-            continue
-
-        if tx.asset_id not in positions:
-            positions[tx.asset_id] = {
-                "asset_id": tx.asset_id,
+        if tx.asset_id not in by_asset:
+            by_asset[tx.asset_id] = {
                 "ticker": ticker,
                 "name": asset_name or ticker,
                 "asset_type": normalize_asset_class(asset_type),
-                "quantity": Decimal("0"),
-                "total_invested": Decimal("0.00"),
-                "average_price": Decimal("0.00"),
-                "total_dividends": Decimal("0.00")
+                "txs": []
             }
+        by_asset[tx.asset_id]["txs"].append(tx)
 
-        pos = positions[tx.asset_id]
-        op = (tx.operation_type or "").lower().strip()
-        qty = Decimal(str(tx.quantity or 0))
-        unit_p = Decimal(str(tx.unit_price or 0))
-        total_amt = Decimal(str(tx.total_amount or 0))
-        costs = Decimal(str(tx.costs or 0))
+    positions = []
 
-        if op in ["buy", "compra"]:
-            if qty > 0:
-                if total_amt > 0:
-                    trade_cost = total_amt
-                elif unit_p > 0:
-                    trade_cost = (qty * unit_p) + costs
-                else:
-                    trade_cost = Decimal("0.00")
+    for asset_id, data in by_asset.items():
+        ticker = data["ticker"]
+        asset_name = data["name"]
+        asset_type = data["asset_type"]
+        asset_txs = data["txs"]
 
-                new_qty = pos["quantity"] + qty
-                new_invested = pos["total_invested"] + trade_cost
-                pos["quantity"] = new_qty
-                pos["total_invested"] = new_invested
-                pos["average_price"] = (new_invested / new_qty).quantize(Decimal("0.01")) if new_qty > 0 else Decimal("0.00")
+        trade_txs = [
+            t for t in asset_txs 
+            if (t.operation_type or "").lower().strip() in ["buy", "compra", "sell", "venda"]
+            and "posição open finance" not in (t.notes or "").lower()
+        ]
+        snapshot_txs = [
+            t for t in asset_txs
+            if "posição open finance" in (t.notes or "").lower()
+        ]
 
-        elif op in ["sell", "venda"]:
-            if pos["quantity"] > 0:
-                pos["quantity"] = max(Decimal("0"), pos["quantity"] - qty)
-                if pos["quantity"] == 0:
-                    pos["total_invested"] = Decimal("0.00")
-                    pos["average_price"] = Decimal("0.00")
-                else:
-                    # Na venda parcial, o preço médio NÃO se altera! O valor investido restante é qty_restante * PM!
-                    pos["total_invested"] = (pos["quantity"] * pos["average_price"]).quantize(Decimal("0.01"))
+        total_qty = Decimal("0")
+        total_cost = Decimal("0.00")
+        avg_price = Decimal("0.00")
+        total_divs = Decimal("0.00")
 
-        elif op in ["dividend", "jcp", "rendimento"]:
-            if normalize_asset_class(asset_type) != "Renda Fixa":
-                amt = total_amt
-                if qty > 1 and unit_p > 0 and amt == (qty * unit_p) and unit_p > Decimal("10.00"):
-                    amt = unit_p
-                pos["total_dividends"] += abs(amt)
+        if asset_type != "Renda Fixa":
+            seen_div_events = set()
+            for tx in asset_txs:
+                op = (tx.operation_type or "").lower().strip()
+                if op in ["dividend", "jcp", "rendimento"]:
+                    if "posição open finance" in (tx.notes or "").lower():
+                        continue
+                    q = Decimal(str(tx.quantity or 0))
+                    u = Decimal(str(tx.unit_price or 0))
+                    amt = Decimal(str(tx.total_amount or 0))
 
-    # Retorna APENAS posições com custódia ativa (quantidade > 0)
-    res = [PortfolioPosition(**p) for p in positions.values() if p["quantity"] > 0]
-    return sorted(res, key=lambda x: x.total_invested, reverse=True)
+                    if q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
+                        amt = u
+
+                    amt = abs(amt)
+                    if amt > 0:
+                        dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else ""
+                        key = (dt_str, round(float(amt), 2))
+                        if key not in seen_div_events:
+                            seen_div_events.add(key)
+                            total_divs += amt
+
+        if trade_txs:
+            for tx in trade_txs:
+                op = (tx.operation_type or "").lower().strip()
+                qty = Decimal(str(tx.quantity or 0))
+                unit_p = Decimal(str(tx.unit_price or 0))
+                total_amt = Decimal(str(tx.total_amount or 0))
+                costs = Decimal(str(tx.costs or 0))
+
+                if op in ["buy", "compra"]:
+                    if qty > 0:
+                        if total_amt > 0:
+                            buy_val = total_amt
+                        elif unit_p > 0:
+                            buy_val = (qty * unit_p) + costs
+                        else:
+                            buy_val = Decimal("0.00")
+
+                        new_qty = total_qty + qty
+                        new_cost = total_cost + buy_val
+                        total_qty = new_qty
+                        total_cost = new_cost
+                        avg_price = (new_cost / new_qty).quantize(Decimal("0.01")) if new_qty > 0 else Decimal("0.00")
+
+                elif op in ["sell", "venda"]:
+                    if total_qty > 0:
+                        sell_qty = min(qty, total_qty)
+                        total_qty = total_qty - sell_qty
+                        if total_qty <= Decimal("0"):
+                            total_qty = Decimal("0")
+                            total_cost = Decimal("0.00")
+                            avg_price = Decimal("0.00")
+                        else:
+                            total_cost = (total_qty * avg_price).quantize(Decimal("0.01"))
+
+        elif snapshot_txs:
+            snap = snapshot_txs[-1]
+            s_qty = Decimal(str(snap.quantity or 0))
+            s_amt = Decimal(str(snap.total_amount or 0))
+            s_price = Decimal(str(snap.unit_price or 0))
+            if s_qty > 0:
+                total_qty = s_qty
+                total_cost = s_amt if s_amt > 0 else (s_qty * s_price).quantize(Decimal("0.01"))
+                avg_price = (total_cost / s_qty).quantize(Decimal("0.01")) if s_qty > 0 else s_price
+
+        if total_qty > Decimal("0"):
+            positions.append(PortfolioPosition(
+                asset_id=asset_id,
+                ticker=ticker,
+                name=asset_name,
+                asset_type=asset_type,
+                quantity=total_qty,
+                average_price=avg_price,
+                total_invested=total_cost,
+                total_dividends=total_divs
+            ))
+
+    return sorted(positions, key=lambda x: x.total_invested, reverse=True)
 
 @router.get("/transactions", response_model=List[InvestmentTransactionResponse])
 def list_investment_transactions(
@@ -448,10 +487,9 @@ def get_investment_summary(
     current_user: User = Depends(get_current_user)
 ):
     portfolio = get_portfolio(db, current_user)
-    # Total da custódia ativo
     total_invested = sum((p.total_invested for p in portfolio if p.quantity > 0), Decimal("0.00"))
 
-    # Total de proventos de renda variável em todo o histórico
+    # Soma de proventos de renda variável de todo o histórico
     all_txs = db.query(InvestmentTransaction, Asset)\
         .join(Asset, InvestmentTransaction.asset_id == Asset.id)\
         .filter(
@@ -460,6 +498,8 @@ def get_investment_summary(
         ).all()
 
     hist_dividends = Decimal("0.00")
+    seen_events = set()
+
     for tx, asset in all_txs:
         if normalize_asset_class(asset.asset_type) != 'Renda Fixa':
             if "posição open finance" in (tx.notes or "").lower():
@@ -467,9 +507,15 @@ def get_investment_summary(
             amt = Decimal(str(tx.total_amount or 0))
             q = Decimal(str(tx.quantity or 0))
             u = Decimal(str(tx.unit_price or 0))
-            if q > 1 and u > 0 and amt == (q * u) and u > Decimal("10.00"):
+            if q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
                 amt = u
-            hist_dividends += abs(amt)
+            amt = abs(amt)
+            if amt > 0:
+                dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else ""
+                key = (tx.asset_id, dt_str, round(float(amt), 2))
+                if key not in seen_events:
+                    seen_events.add(key)
+                    hist_dividends += amt
 
     now = datetime.utcnow()
     month_start = datetime(now.year, now.month, 1)
@@ -517,7 +563,6 @@ def get_dividends_by_period(
     p_start, p_end = resolve_date_range(p_code)
     p_label = PERIOD_LABELS.get(p_code, "Período Selecionado")
 
-    # Proventos do módulo de investimentos (InvestmentTransaction)
     inv_query = db.query(InvestmentTransaction, Asset)\
         .join(Asset, InvestmentTransaction.asset_id == Asset.id)\
         .filter(
@@ -533,19 +578,38 @@ def get_dividends_by_period(
     inv_dividends = inv_query.order_by(InvestmentTransaction.trade_date.desc(), InvestmentTransaction.id.desc()).all()
 
     items: List[DividendItem] = []
+    seen_events = set()
 
     for tx, asset in inv_dividends:
         norm_type = normalize_asset_class(asset.asset_type)
         if norm_type == "Renda Fixa":
             continue
 
+        if "posição open finance" in (tx.notes or "").lower():
+            continue
+
+        qty = Decimal(str(tx.quantity or 0))
+        unit_p = Decimal(str(tx.unit_price or 0))
         amt = Decimal(str(tx.total_amount or 0))
+
+        if qty > 1 and unit_p >= Decimal("5.00") and amt >= (qty * unit_p - Decimal("0.05")):
+            amt = unit_p
+            unit_p = (amt / qty).quantize(Decimal("0.0001"))
+
         amt = abs(amt)
+        if amt <= Decimal("0.00"):
+            continue
+
+        dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else "no-date"
+        event_key = (tx.asset_id, dt_str, round(float(amt), 2))
+        if event_key in seen_events:
+            continue
+        seen_events.add(event_key)
 
         op_display = "Dividendo"
-        if tx.operation_type.lower() == "jcp":
+        if (tx.operation_type or "").lower() == "jcp":
             op_display = "JCP"
-        elif tx.operation_type.lower() == "rendimento":
+        elif (tx.operation_type or "").lower() == "rendimento":
             op_display = "Rendimento FII"
 
         src_display = "Nota Sinacor B3" if tx.source == "pdf_sinacor" else ("Planilha" if tx.source == "spreadsheet" else "Manual")
@@ -558,13 +622,12 @@ def get_dividends_by_period(
             asset_type=norm_type,
             operation_type=op_display,
             total_amount=amt,
-            quantity=Decimal(str(tx.quantity or 0)),
-            unit_price=Decimal(str(tx.unit_price or 0)),
+            quantity=qty,
+            unit_price=unit_p,
             source=src_display,
             notes=tx.notes
         ))
 
-    # Ordena por data decrescente (mais recente primeiro)
     items.sort(key=lambda x: x.trade_date, reverse=True)
 
     total_amount = sum((it.total_amount for it in items), Decimal("0.00"))

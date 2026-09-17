@@ -108,14 +108,33 @@ def get_portfolio(
         .filter(InvestmentTransaction.user_id == current_user.id)\
         .order_by(InvestmentTransaction.trade_date.asc(), InvestmentTransaction.id.asc()).all()
 
+    # Mapeia se há transações de compra/venda normais vs snapshot da Open Finance
+    asset_trades_count = {}
+    for tx, _, _, _ in txs:
+        is_snapshot = "posição open finance" in (tx.notes or "").lower()
+        if tx.asset_id not in asset_trades_count:
+            asset_trades_count[tx.asset_id] = {"snapshot": 0, "trades": 0}
+        if is_snapshot:
+            asset_trades_count[tx.asset_id]["snapshot"] += 1
+        elif tx.operation_type.lower() in ["buy", "compra", "sell", "venda"]:
+            asset_trades_count[tx.asset_id]["trades"] += 1
+
     positions = {}
 
     for tx, ticker, asset_name, asset_type in txs:
+        if not ticker:
+            continue
+
+        is_snapshot = "posição open finance" in (tx.notes or "").lower()
+        # Se existem transações individuais reais para este ativo, ignora o snapshot para não duplicar custódia
+        if is_snapshot and asset_trades_count[tx.asset_id]["trades"] > 0:
+            continue
+
         if tx.asset_id not in positions:
             positions[tx.asset_id] = {
                 "asset_id": tx.asset_id,
                 "ticker": ticker,
-                "name": asset_name,
+                "name": asset_name or ticker,
                 "asset_type": normalize_asset_class(asset_type),
                 "quantity": Decimal("0"),
                 "total_invested": Decimal("0.00"),
@@ -124,32 +143,46 @@ def get_portfolio(
             }
 
         pos = positions[tx.asset_id]
-        op = tx.operation_type.lower()
+        op = (tx.operation_type or "").lower().strip()
         qty = Decimal(str(tx.quantity or 0))
+        unit_p = Decimal(str(tx.unit_price or 0))
         total_amt = Decimal(str(tx.total_amount or 0))
         costs = Decimal(str(tx.costs or 0))
 
         if op in ["buy", "compra"]:
-            new_qty = pos["quantity"] + qty
-            new_invested = pos["total_invested"] + total_amt + costs
-            pos["quantity"] = new_qty
-            pos["total_invested"] = new_invested
-            pos["average_price"] = (new_invested / new_qty).quantize(Decimal("0.01")) if new_qty > 0 else Decimal("0.00")
+            if qty > 0:
+                if total_amt > 0:
+                    trade_cost = total_amt
+                elif unit_p > 0:
+                    trade_cost = (qty * unit_p) + costs
+                else:
+                    trade_cost = Decimal("0.00")
+
+                new_qty = pos["quantity"] + qty
+                new_invested = pos["total_invested"] + trade_cost
+                pos["quantity"] = new_qty
+                pos["total_invested"] = new_invested
+                pos["average_price"] = (new_invested / new_qty).quantize(Decimal("0.01")) if new_qty > 0 else Decimal("0.00")
 
         elif op in ["sell", "venda"]:
             if pos["quantity"] > 0:
-                sell_proportion = min(qty / pos["quantity"], Decimal("1.0"))
-                pos["total_invested"] -= (pos["total_invested"] * sell_proportion).quantize(Decimal("0.01"))
                 pos["quantity"] = max(Decimal("0"), pos["quantity"] - qty)
                 if pos["quantity"] == 0:
                     pos["total_invested"] = Decimal("0.00")
                     pos["average_price"] = Decimal("0.00")
+                else:
+                    # Na venda parcial, o preço médio NÃO se altera! O valor investido restante é qty_restante * PM!
+                    pos["total_invested"] = (pos["quantity"] * pos["average_price"]).quantize(Decimal("0.01"))
 
         elif op in ["dividend", "jcp", "rendimento"]:
             if normalize_asset_class(asset_type) != "Renda Fixa":
-                pos["total_dividends"] += total_amt
+                amt = total_amt
+                if qty > 1 and unit_p > 0 and amt == (qty * unit_p) and unit_p > Decimal("10.00"):
+                    amt = unit_p
+                pos["total_dividends"] += abs(amt)
 
-    res = [PortfolioPosition(**p) for p in positions.values() if p["quantity"] > 0 or p["total_dividends"] > 0]
+    # Retorna APENAS posições com custódia ativa (quantidade > 0)
+    res = [PortfolioPosition(**p) for p in positions.values() if p["quantity"] > 0]
     return sorted(res, key=lambda x: x.total_invested, reverse=True)
 
 @router.get("/transactions", response_model=List[InvestmentTransactionResponse])
@@ -306,9 +339,9 @@ async def upload_spreadsheet(
     col_ticker = next((c for c in df.columns if "ticker" in c or "ativo" in c or "código" in c or "codigo" in c), None)
     col_op = next((c for c in df.columns if "oper" in c or "tipo" in c), None)
     col_qty = next((c for c in df.columns if "quant" in c or "qtd" in c), None)
-    col_price = next((c for c in df.columns if "preço" in c or "preco" in c or "unit" in c), None)
-    col_total = next((c for c in df.columns if "total" in c or "valor" in c), None)
-    col_costs = next((c for c in df.columns if "taxa" in c or "custo" in c), None)
+    col_price = next((c for c in df.columns if "preço" in c or "preco" in c or "unit" in c or "cotacao" in c), None)
+    col_total = next((c for c in df.columns if "total" in c or "líquido" in c or "liquido" in c or c == "valor"), None)
+    col_costs = next((c for c in df.columns if "taxa" in c or "custo" in c or "emol" in c), None)
     col_class = next((c for c in df.columns if "classe" in c or "classif" in c or "categoria" in c), None)
 
     if not col_ticker or not col_qty:
@@ -322,8 +355,14 @@ async def upload_spreadsheet(
 
         raw_qty = Decimal(str(row[col_qty]).replace(",", "."))
         raw_price = Decimal(str(row[col_price]).replace(",", ".")) if col_price and pd.notna(row[col_price]) else Decimal("0.00")
-        raw_total = Decimal(str(row[col_total]).replace(",", ".")) if col_total and pd.notna(row[col_total]) else (raw_qty * raw_price)
         raw_costs = Decimal(str(row[col_costs]).replace(",", ".")) if col_costs and pd.notna(row[col_costs]) else Decimal("0.00")
+
+        if col_total and pd.notna(row[col_total]):
+            raw_total = Decimal(str(row[col_total]).replace(",", "."))
+        elif raw_price > 0 and raw_qty > 0:
+            raw_total = (raw_qty * raw_price).quantize(Decimal("0.01"))
+        else:
+            raw_total = raw_price
 
         op_type = "buy"
         if col_op and pd.notna(row[col_op]):
@@ -409,8 +448,28 @@ def get_investment_summary(
     current_user: User = Depends(get_current_user)
 ):
     portfolio = get_portfolio(db, current_user)
-    total_invested = sum(p.total_invested for p in portfolio)
-    total_dividends = sum(p.total_dividends for p in portfolio if normalize_asset_class(p.asset_type) != 'Renda Fixa')
+    # Total da custódia ativo
+    total_invested = sum((p.total_invested for p in portfolio if p.quantity > 0), Decimal("0.00"))
+
+    # Total de proventos de renda variável em todo o histórico
+    all_txs = db.query(InvestmentTransaction, Asset)\
+        .join(Asset, InvestmentTransaction.asset_id == Asset.id)\
+        .filter(
+            InvestmentTransaction.user_id == current_user.id,
+            InvestmentTransaction.operation_type.in_(["dividend", "jcp", "rendimento"])
+        ).all()
+
+    hist_dividends = Decimal("0.00")
+    for tx, asset in all_txs:
+        if normalize_asset_class(asset.asset_type) != 'Renda Fixa':
+            if "posição open finance" in (tx.notes or "").lower():
+                continue
+            amt = Decimal(str(tx.total_amount or 0))
+            q = Decimal(str(tx.quantity or 0))
+            u = Decimal(str(tx.unit_price or 0))
+            if q > 1 and u > 0 and amt == (q * u) and u > Decimal("10.00"):
+                amt = u
+            hist_dividends += abs(amt)
 
     now = datetime.utcnow()
     month_start = datetime(now.year, now.month, 1)
@@ -433,7 +492,7 @@ def get_investment_summary(
     return InvestmentSummary(
         total_equity_invested=total_invested,
         monthly_capital_gain=monthly_gain,
-        total_dividends_received=total_dividends,
+        total_dividends_received=hist_dividends,
         positions_count=len([p for p in portfolio if p.quantity > 0])
     )
 

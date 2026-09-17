@@ -40,6 +40,7 @@ class Transaction(Base):
     pluggy_transaction_id = Column(String(100), nullable=True)
     cost_type = Column(String(20), default="variavel", nullable=False) # fixa, variavel
     is_accounted = Column(Boolean, default=True, nullable=False)
+    spending_nature = Column(String(20), default="recorrente", nullable=False) # recorrente, futilidade
 
 class Asset(Base):
     __tablename__ = "assets"

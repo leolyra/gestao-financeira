@@ -16,6 +16,8 @@ def run_migrations():
             conn.execute(text("UPDATE transactions SET cost_type = 'variavel' WHERE cost_type IS NULL;"))
             conn.execute(text("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS is_accounted BOOLEAN DEFAULT TRUE;"))
             conn.execute(text("UPDATE transactions SET is_accounted = TRUE WHERE is_accounted IS NULL;"))
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS spending_nature VARCHAR(20) DEFAULT 'recorrente';"))
+            conn.execute(text("UPDATE transactions SET spending_nature = 'recorrente' WHERE spending_nature IS NULL;"))
             print('Database auto-migrations executed successfully.')
     except Exception as e:
         print(f'Migration notice: {e}')
@@ -23,7 +25,7 @@ def run_migrations():
 Base.metadata.create_all(bind=engine)
 run_migrations()
 
-app = FastAPI(title=settings.PROJECT_NAME, version="1.0.0")
+app = FastAPI(title=settings.PROJECT_NAME, version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,

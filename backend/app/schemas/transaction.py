@@ -12,6 +12,7 @@ class TransactionBase(BaseModel):
     is_manual: bool = True
     cost_type: Optional[str] = "variavel"
     is_accounted: bool = True
+    spending_nature: Optional[str] = "recorrente" 
 
 class TransactionCreate(TransactionBase):
     pass
@@ -21,6 +22,9 @@ class TransactionUpdateCategory(BaseModel):
 
 class TransactionUpdateCostType(BaseModel):
     cost_type: str
+
+class TransactionUpdateSpendingNature(BaseModel):
+    spending_nature: str
 
 class TransactionUpdateAccounted(BaseModel):
     is_accounted: bool
@@ -42,6 +46,7 @@ class DashboardSummary(BaseModel):
     expenses_by_category: List[Dict[str, Any]]
     monthly_trend: List[Dict[str, Any]]
     cost_type_summary: Optional[Dict[str, Any]] = None
+    spending_nature_summary: Optional[Dict[str, Any]] = None
 
 class ExportXlsxPayload(BaseModel):
     transaction_ids: Optional[List[int]] = None

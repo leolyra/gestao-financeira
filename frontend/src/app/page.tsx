@@ -92,6 +92,7 @@ interface Transaction {
   account_name?: string;
   cost_type?: 'fixa' | 'variavel';
   is_accounted?: boolean;
+  spending_nature?: 'recorrente' | 'futilidade';
 }
 
 interface DividendItem {
@@ -227,6 +228,16 @@ interface DashboardSummary {
     fixed_income_pct: number;
     variable_income_pct: number;
   };
+  spending_nature_summary?: {
+    recorrente: number;
+    futilidade: number;
+    total: number;
+    recorrente_pct: number;
+    futilidade_pct: number;
+    recorrente_count: number;
+    futilidade_count: number;
+    futilidade_by_category: { category: string; amount: number }[];
+  };
 }
 
 export default function Home() {
@@ -287,6 +298,9 @@ export default function Home() {
   const [isLoadingDividends, setIsLoadingDividends] = useState<boolean>(false);
   const [custodiaClassFilter, setCustodiaClassFilter] = useState<string>('all');
   const [invAssetClass, setInvAssetClass] = useState<string>('Ações');
+  const [showChangelogModal, setShowChangelogModal] = useState<boolean>(false);
+  const [newTxSpendingNature, setNewTxSpendingNature] = useState<'recorrente' | 'futilidade'>('recorrente');
+  const [filterSpendingNature, setFilterSpendingNature] = useState<'all' | 'recorrente' | 'futilidade'>('all');
 
 
   // Modais de Investimento
@@ -687,7 +701,8 @@ export default function Home() {
           date: new Date(newTxDate).toISOString(),
           is_manual: true,
           cost_type: newTxCostType,
-          is_accounted: newTxIsAccounted
+          is_accounted: newTxIsAccounted,
+          spending_nature: newTxSpendingNature
         })
       });
 
@@ -696,6 +711,7 @@ export default function Home() {
         setTransactions([created, ...transactions]);
         setNewTxDesc('');
         setNewTxAmount('');
+        setNewTxSpendingNature('recorrente');
         loadAllData(); // atualiza saldos e dashboard
       }
     } catch (err) {
@@ -717,6 +733,27 @@ export default function Home() {
       }
     } catch (err) {
       console.error(err);
+    }
+  }
+
+  async function handleUpdateSpendingNature(txId: number, spendingNature: string) {
+    try {
+      const res = await fetchWithAuth(`/transactions/${txId}/spending-nature`, {
+        method: 'PATCH',
+        body: JSON.stringify({ spending_nature: spendingNature })
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setTransactions(prev => prev.map(t => t.id === txId ? updated : t));
+        const sumRes = await fetchWithAuth(`/transactions/summary?period=${dashboardPeriod}`);
+        if (sumRes.ok) setSummary(await sumRes.json());
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Aviso: O backend não conseguiu salvar a natureza do gasto: ${err.detail || res.statusText}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Falha de conexão com a API: ' + err.message);
     }
   }
 
@@ -784,6 +821,7 @@ export default function Home() {
           if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
         }
         if (filterCostType !== 'all' && (t.cost_type || 'variavel') !== filterCostType) return false;
+        if (filterSpendingNature !== 'all' && (t.spending_nature || 'recorrente') !== filterSpendingNature) return false;
         if (filterAccounted !== 'all') {
           const isAcc = t.is_accounted ?? true;
           if (filterAccounted === 'yes' && !isAcc) return false;
@@ -1159,7 +1197,146 @@ export default function Home() {
             </button>
           </div>
         </div>
-      </main>
+        {/* MODAL DE CHANGELOG / HISTÓRICO DE VERSÕES */}
+      {showChangelogModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-fade-in">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-white">Histórico de Versões & Novidades</h2>
+                    <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      v2.0
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Acompanhe a evolução, novos recursos e melhorias da plataforma financeira.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowChangelogModal(false)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-sm transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body: Timeline de Versões */}
+            <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-300">
+              {/* VERSÃO 2.0 (ATUAL) */}
+              <div className="relative pl-6 border-l-2 border-indigo-500 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-indigo-500 ring-4 ring-slate-900 flex items-center justify-center">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-white text-sm">Versão 2.0</span>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">
+                    Versão Atual
+                  </span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  Versão com foco em inteligência orçamentária, análise comportamental de gastos e controle avançado de investimentos:
+                </p>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-300 ml-1">
+                  <li>
+                    <strong className="text-white">Classificação Recorrente vs. Futilidade:</strong> Nova coluna interativa no extrato de lançamentos permitindo classificar gastos entre habituais/essenciais e supérfluos, com padrão automático como <em>Recorrente</em>.
+                  </li>
+                  <li>
+                    <strong className="text-white">Dashboard de Futilidades:</strong> Painel de consolidação por período comparando o montante e percentual gasto em Recorrentes vs. Futilidades, com barra de proporção e ranking das categorias que mais consumiram gastos supérfluos.
+                  </li>
+                  <li>
+                    <strong className="text-white">Filtro de Lançamentos por Natureza:</strong> Seleção rápida no extrato para auditar apenas despesas recorrentes ou apenas futilidades, integrado à exportação em Excel (.xlsx).
+                  </li>
+                  <li>
+                    <strong className="text-white">Classificação Padronizada de Ativos:</strong> Organização da carteira em 5 classes oficiais (<em>Ações</em>, <em>Fundos Imobiliários</em>, <em>Internacional</em>, <em>Renda Fixa</em> e <em>Criptos</em>) com seletor interativo na custódia e barra de alocação patrimonial.
+                  </li>
+                  <li>
+                    <strong className="text-white">Visualização de Dividendos por Período:</strong> Seção dedicada com filtro temporal unificado (Mês atual, 30d, mês anterior, 60d, 90d, esse ano, 12m), consolidando por ativo e desconsiderando ativos de Renda Fixa.
+                  </li>
+                  <li>
+                    <strong className="text-white">Identificação da Aplicação (v2.0):</strong> Selo de versão ao lado do título com modal interativo de histórico de versões.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 1.5 */}
+              <div className="relative pl-6 border-l-2 border-slate-700 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-700 ring-4 ring-slate-900"></div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 1.5</span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400 ml-1">
+                  <li>
+                    <strong className="text-slate-300">Filtro Padronizado por Período:</strong> Opções unificadas (<em>Mês atual, 30 dias, mês anterior, 60 dias, 90 dias, esse ano e últimos 12 meses</em>) no Dashboard, Extrato e Categorias.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Não Contabilizar Lançamentos:</strong> Opção de desmarcar transações (como transferências internas e estornos) para não inflar receitas e despesas nos gráficos.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Exportação Nativa para Excel (.xlsx):</strong> Download de extrato contábil formatado com fórmulas de totais e filtros aplicados.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 1.4 */}
+              <div className="relative pl-6 border-l-2 border-slate-800 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-800 ring-4 ring-slate-900"></div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 1.4</span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400 ml-1">
+                  <li>
+                    <strong className="text-slate-300">Estrutura de Custos Fixos vs. Variáveis:</strong> Separação de custos contratuais e recorrentes para avaliação de flexibilidade orçamentária.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Evolução Histórica Mensal:</strong> Mapeamento mês a mês de receitas, despesas e saldo líquido.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Painel de Diagnóstico Open Finance:</strong> Inspeção técnica detalhada de contas e investimentos retornados pelas conexões bancárias.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 1.0 */}
+              <div className="relative pl-6 border-l-2 border-slate-800 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-800 ring-4 ring-slate-900"></div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 1.0</span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400 ml-1">
+                  <li>Lançamento inicial da plataforma com sincronização bancária Open Finance via Pluggy.</li>
+                  <li>Autocategorização de despesas com inteligência artificial local (Ollama).</li>
+                  <li>Importação de notas de corretagem da B3 no formato Sinacor (PDF) e gestão consolidada de carteira.</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowChangelogModal(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition shadow"
+              >
+                Entendi / Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </main>
     );
   }
 
@@ -1168,10 +1345,21 @@ export default function Home() {
       {/* Top Header */}
       <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center pb-6 border-b border-slate-800 gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
-            Painel Financeiro
-          </h1>
-          <p className="text-sm text-slate-400">
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl md:text-3xl font-bold text-white tracking-tight">
+              Painel Financeiro
+            </h1>
+            <button
+              type="button"
+              onClick={() => setShowChangelogModal(true)}
+              className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 hover:text-indigo-300 border border-indigo-500/30 transition cursor-pointer shadow-sm flex items-center gap-1"
+              title="Clique para ver o resumo das versões e novidades (Changelog)"
+            >
+              <span>v2.0</span>
+              <Sparkles className="w-3 h-3 text-indigo-400" />
+            </button>
+          </div>
+          <p className="text-sm text-slate-400 mt-0.5">
             Bem-vindo, <strong className="text-slate-200">{user?.name}</strong>
           </p>
         </div>
@@ -1422,8 +1610,8 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Gráficos e Distribuição */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Gráficos e Distribuição - Linha 1: Estrutura de Custos & Análise de Futilidades */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* 1. Despesas Fixas vs. Variáveis */}
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl flex flex-col justify-between">
               <div>
@@ -1511,6 +1699,93 @@ export default function Home() {
               </div>
             </div>
 
+            {/* 2. Despesas Recorrentes vs. Futilidade */}
+            <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl flex flex-col justify-between shadow-sm">
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-rose-400" /> Recorrente vs. Futilidade ({getPeriodLabel(dashboardPeriod)})
+                  </h3>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-300 border border-rose-500/20 font-medium">
+                    Análise de Supérfluos
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mb-4">
+                  Consolidação entre despesas habituais/essenciais e gastos dispensáveis ou por impulso no período selecionado.
+                </p>
+
+                {/* Barra Proporcional Recorrente x Futilidade */}
+                <div className="space-y-2 mb-5">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span className="text-blue-400 flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
+                      Recorrente: {summary?.spending_nature_summary?.recorrente_pct ?? 0}%
+                    </span>
+                    <span className="text-rose-400 flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                      Futilidade: {summary?.spending_nature_summary?.futilidade_pct ?? 0}%
+                    </span>
+                  </div>
+
+                  {/* Barra Segmentada Visual */}
+                  <div className="w-full h-4 bg-slate-800 rounded-full overflow-hidden flex shadow-inner">
+                    <div
+                      className="bg-blue-500 hover:bg-blue-400 transition-all duration-500"
+                      style={{ width: `${summary?.spending_nature_summary?.recorrente_pct ?? 0}%` }}
+                      title={`Despesas Recorrentes: R$ ${Number(summary?.spending_nature_summary?.recorrente || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                    />
+                    <div
+                      className="bg-rose-500 hover:bg-rose-400 transition-all duration-500"
+                      style={{ width: `${summary?.spending_nature_summary?.futilidade_pct ?? 0}%` }}
+                      title={`Despesas Futilidade: R$ ${Number(summary?.spending_nature_summary?.futilidade || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[11px] text-slate-400 pt-1 font-mono">
+                    <span>R$ {Number(summary?.spending_nature_summary?.recorrente || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({summary?.spending_nature_summary?.recorrente_count || 0}x)</span>
+                    <span className="text-rose-400 font-semibold">R$ {Number(summary?.spending_nature_summary?.futilidade || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} ({summary?.spending_nature_summary?.futilidade_count || 0}x)</span>
+                  </div>
+                </div>
+
+                {/* Ranking de Categorias onde ocorreram Futilidades */}
+                {summary?.spending_nature_summary?.futilidade_by_category && summary.spending_nature_summary.futilidade_by_category.length > 0 ? (
+                  <div className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl space-y-2">
+                    <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                      Onde foram os gastos supérfluos no período:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {summary.spending_nature_summary.futilidade_by_category.map((fc) => (
+                        <span key={fc.category} className="px-2 py-0.5 bg-rose-500/10 text-rose-300 border border-rose-500/20 rounded text-[10px] font-medium font-mono">
+                          {fc.category}: R$ {Number(fc.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 bg-emerald-950/30 border border-emerald-800/40 rounded-xl text-emerald-400 text-[11px] flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 shrink-0 text-emerald-400" />
+                    <span>Excelente! Nenhuma despesa classificada como futilidade no período selecionado.</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-slate-800/60 text-xs">
+                {(summary?.spending_nature_summary?.futilidade_pct ?? 0) <= 15 ? (
+                  <span className="text-emerald-400 font-medium flex items-start gap-1.5">
+                    <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><strong>Excelente Disciplina:</strong> Apenas {(summary?.spending_nature_summary?.futilidade_pct ?? 0)}% dos gastos foram futilidades.</span>
+                  </span>
+                ) : (
+                  <span className="text-amber-400 font-medium flex items-start gap-1.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><strong>Oportunidade de Poupança:</strong> {(summary?.spending_nature_summary?.futilidade_pct ?? 0)}% das despesas foram futilidades. Reduzi-las aumenta sua capacidade de aporte.</span>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Gráficos e Distribuição - Linha 2: Categorias & Histórico Mensal */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Distribuição por Categoria */}
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl">
               <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
@@ -1882,7 +2157,7 @@ export default function Home() {
             <h2 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
               <PlusCircle className="w-4 h-4 text-indigo-400" /> Registrar Novo Lançamento Manual
             </h2>
-            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3">
+            <form onSubmit={handleCreateTransaction} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-9 gap-3">
               <div className="lg:col-span-2">
                 <input
                   type="text"
@@ -1951,6 +2226,18 @@ export default function Home() {
                 </select>
               </div>
 
+              <div>
+                <select
+                  value={newTxSpendingNature}
+                  onChange={(e) => setNewTxSpendingNature(e.target.value as 'recorrente' | 'futilidade')}
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                  title="Classificação de Natureza do Gasto (Padrão: Recorrente)"
+                >
+                  <option value="recorrente">Recorrente (Padrão)</option>
+                  <option value="futilidade">Futilidade</option>
+                </select>
+              </div>
+
               <div className="flex items-center gap-2 px-1">
                 <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
                   <input
@@ -1963,7 +2250,7 @@ export default function Home() {
                 </label>
               </div>
 
-              <div className="sm:col-span-2 lg:col-span-8 flex justify-end">
+              <div className="sm:col-span-2 lg:col-span-9 flex justify-end">
                 <button
                   type="submit"
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition"
@@ -1988,6 +2275,7 @@ export default function Home() {
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
                     }
                     if (filterCostType !== 'all' && (t.cost_type || 'variavel') !== filterCostType) return false;
+                    if (filterSpendingNature !== 'all' && (t.spending_nature || 'recorrente') !== filterSpendingNature) return false;
                     if (filterAccounted !== 'all') {
                       const isAcc = t.is_accounted ?? true;
                       if (filterAccounted === 'yes' && !isAcc) return false;
@@ -2051,6 +2339,18 @@ export default function Home() {
                   <option value="variavel">Apenas Variáveis</option>
                 </select>
 
+                {/* Filtro por Natureza: Recorrente / Futilidade */}
+                <select
+                  value={filterSpendingNature}
+                  onChange={(e) => setFilterSpendingNature(e.target.value as any)}
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Filtrar por Recorrente ou Futilidade"
+                >
+                  <option value="all">Todas as Naturezas</option>
+                  <option value="recorrente">Apenas Recorrentes</option>
+                  <option value="futilidade">Apenas Futilidades</option>
+                </select>
+
                 {/* Filtro por Contabilização */}
                 <select
                   value={filterAccounted}
@@ -2063,7 +2363,7 @@ export default function Home() {
                   <option value="no">Apenas Ignorados</option>
                 </select>
 
-                {(filterAccount !== 'all' || filterCategory !== 'all' || filterCostType !== 'all' || filterAccounted !== 'all' || filterPeriod !== 'all') && (
+                {(filterAccount !== 'all' || filterCategory !== 'all' || filterCostType !== 'all' || filterSpendingNature !== 'all' || filterAccounted !== 'all' || filterPeriod !== 'all') && (
                   <button
                     type="button"
                     onClick={() => {
@@ -2071,6 +2371,7 @@ export default function Home() {
                       setFilterAccount('all');
                       setFilterCategory('all');
                       setFilterCostType('all');
+                      setFilterSpendingNature('all');
                       setFilterAccounted('all');
                     }}
                     className="px-2 py-1 text-[11px] text-rose-400 hover:text-rose-300 hover:underline transition"
@@ -2102,6 +2403,7 @@ export default function Home() {
                     <th className="py-3 px-4">Conta</th>
                     <th className="py-3 px-4">Categoria</th>
                     <th className="py-3 px-4">Tipo</th>
+                    <th className="py-3 px-4">Natureza</th>
                     <th className="py-3 px-4 text-center" title="Se ativado, entra nos totais do Dashboard">Contabilizar</th>
                     <th className="py-3 px-4 text-right">Valor</th>
                   </tr>
@@ -2115,6 +2417,7 @@ export default function Home() {
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
                     }
                     if (filterCostType !== 'all' && (t.cost_type || 'variavel') !== filterCostType) return false;
+                    if (filterSpendingNature !== 'all' && (t.spending_nature || 'recorrente') !== filterSpendingNature) return false;
                     if (filterAccounted !== 'all') {
                       const isAcc = t.is_accounted ?? true;
                       if (filterAccounted === 'yes' && !isAcc) return false;
@@ -2173,6 +2476,21 @@ export default function Home() {
                             <option value="fixa">Fixa</option>
                           </select>
                         </td>
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <select
+                            value={tx.spending_nature || 'recorrente'}
+                            onChange={(e) => handleUpdateSpendingNature(tx.id, e.target.value)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border focus:outline-none transition shadow-sm ${
+                              tx.spending_nature === 'futilidade'
+                                ? 'bg-rose-950/70 border-rose-600/50 text-rose-300 hover:bg-rose-900/60'
+                                : 'bg-blue-950/70 border-blue-600/50 text-blue-300 hover:bg-blue-900/60'
+                            }`}
+                            title="Classificar transação como Recorrente ou Futilidade"
+                          >
+                            <option value="recorrente">Recorrente</option>
+                            <option value="futilidade">Futilidade</option>
+                          </select>
+                        </td>
                         <td className="py-3 px-4 text-center whitespace-nowrap">
                           <button
                             type="button"
@@ -2199,7 +2517,7 @@ export default function Home() {
                   })}
                   {transactions.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
+                      <td colSpan={8} className="py-8 text-center text-xs text-slate-500">
                         Nenhum lançamento registrado. Conecte seu banco via Open Finance ou insira lançamentos manuais acima.
                       </td>
                     </tr>
@@ -2731,7 +3049,7 @@ export default function Home() {
                       ))}
                     {portfolio.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
+                        <td colSpan={8} className="py-8 text-center text-xs text-slate-500">
                           Nenhum ativo em carteira. Importe uma nota de corretagem em PDF (Sinacor) ou registre operações manuais.
                         </td>
                       </tr>
@@ -2906,7 +3224,7 @@ export default function Home() {
               </p>
             </div>
 
-            <form onSubmit={handleCalculateSwap} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-8 gap-3">
+            <form onSubmit={handleCalculateSwap} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-9 gap-3">
               <input
                 type="text"
                 placeholder="Ativo Origem (ex: HGLG11)"
@@ -2970,7 +3288,7 @@ export default function Home() {
                   required
                 />
               </div>
-              <div className="sm:col-span-2 lg:col-span-8 flex justify-end">
+              <div className="sm:col-span-2 lg:col-span-9 flex justify-end">
                 <button
                   type="submit"
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition"
@@ -3485,6 +3803,145 @@ export default function Home() {
                 className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow transition"
               >
                 Sincronizar Todas Agora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CHANGELOG / HISTÓRICO DE VERSÕES */}
+      {showChangelogModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-fade-in">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-bold text-white">Histórico de Versões & Novidades</h2>
+                    <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      v2.0
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Acompanhe a evolução, novos recursos e melhorias da plataforma financeira.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowChangelogModal(false)}
+                className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-sm transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Body: Timeline de Versões */}
+            <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-300">
+              {/* VERSÃO 2.0 (ATUAL) */}
+              <div className="relative pl-6 border-l-2 border-indigo-500 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-indigo-500 ring-4 ring-slate-900 flex items-center justify-center">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-white text-sm">Versão 2.0</span>
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">
+                    Versão Atual
+                  </span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  Versão com foco em inteligência orçamentária, análise comportamental de gastos e controle avançado de investimentos:
+                </p>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-300 ml-1">
+                  <li>
+                    <strong className="text-white">Classificação Recorrente vs. Futilidade:</strong> Nova coluna interativa no extrato de lançamentos permitindo classificar gastos entre habituais/essenciais e supérfluos, com padrão automático como <em>Recorrente</em>.
+                  </li>
+                  <li>
+                    <strong className="text-white">Dashboard de Futilidades:</strong> Painel de consolidação por período comparando o montante e percentual gasto em Recorrentes vs. Futilidades, com barra de proporção e ranking das categorias que mais consumiram gastos supérfluos.
+                  </li>
+                  <li>
+                    <strong className="text-white">Filtro de Lançamentos por Natureza:</strong> Seleção rápida no extrato para auditar apenas despesas recorrentes ou apenas futilidades, integrado à exportação em Excel (.xlsx).
+                  </li>
+                  <li>
+                    <strong className="text-white">Classificação Padronizada de Ativos:</strong> Organização da carteira em 5 classes oficiais (<em>Ações</em>, <em>Fundos Imobiliários</em>, <em>Internacional</em>, <em>Renda Fixa</em> e <em>Criptos</em>) com seletor interativo na custódia e barra de alocação patrimonial.
+                  </li>
+                  <li>
+                    <strong className="text-white">Visualização de Dividendos por Período:</strong> Seção dedicada com filtro temporal unificado (Mês atual, 30d, mês anterior, 60d, 90d, esse ano, 12m), consolidando por ativo e desconsiderando ativos de Renda Fixa.
+                  </li>
+                  <li>
+                    <strong className="text-white">Identificação da Aplicação (v2.0):</strong> Selo de versão ao lado do título com modal interativo de histórico de versões.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 1.5 */}
+              <div className="relative pl-6 border-l-2 border-slate-700 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-700 ring-4 ring-slate-900"></div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 1.5</span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400 ml-1">
+                  <li>
+                    <strong className="text-slate-300">Filtro Padronizado por Período:</strong> Opções unificadas (<em>Mês atual, 30 dias, mês anterior, 60 dias, 90 dias, esse ano e últimos 12 meses</em>) no Dashboard, Extrato e Categorias.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Não Contabilizar Lançamentos:</strong> Opção de desmarcar transações (como transferências internas e estornos) para não inflar receitas e despesas nos gráficos.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Exportação Nativa para Excel (.xlsx):</strong> Download de extrato contábil formatado com fórmulas de totais e filtros aplicados.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 1.4 */}
+              <div className="relative pl-6 border-l-2 border-slate-800 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-800 ring-4 ring-slate-900"></div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 1.4</span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400 ml-1">
+                  <li>
+                    <strong className="text-slate-300">Estrutura de Custos Fixos vs. Variáveis:</strong> Separação de custos contratuais e recorrentes para avaliação de flexibilidade orçamentária.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Evolução Histórica Mensal:</strong> Mapeamento mês a mês de receitas, despesas e saldo líquido.
+                  </li>
+                  <li>
+                    <strong className="text-slate-300">Painel de Diagnóstico Open Finance:</strong> Inspeção técnica detalhada de contas e investimentos retornados pelas conexões bancárias.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 1.0 */}
+              <div className="relative pl-6 border-l-2 border-slate-800 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-800 ring-4 ring-slate-900"></div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 1.0</span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-400 ml-1">
+                  <li>Lançamento inicial da plataforma com sincronização bancária Open Finance via Pluggy.</li>
+                  <li>Autocategorização de despesas com inteligência artificial local (Ollama).</li>
+                  <li>Importação de notas de corretagem da B3 no formato Sinacor (PDF) e gestão consolidada de carteira.</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-800 bg-slate-950/60 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowChangelogModal(false)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition shadow"
+              >
+                Entendi / Fechar
               </button>
             </div>
           </div>

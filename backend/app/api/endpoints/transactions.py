@@ -14,6 +14,7 @@ from app.schemas.transaction import (
     TransactionCreate, 
     TransactionUpdateCategory, 
     TransactionUpdateCostType,
+    TransactionUpdateSpendingNature,
     TransactionUpdateAccounted,
     ExportXlsxPayload,
     TransactionResponse,
@@ -111,6 +112,9 @@ def create_transaction(
     if c_type not in ["fixa", "variavel"]:
         c_type = "variavel"
 
+    s_nature = (tx_in.spending_nature or "recorrente").lower().strip()
+    spending_nature = "futilidade" if "futil" in s_nature else "recorrente"
+
     tx = Transaction(
         account_id=tx_in.account_id,
         category_id=category_id,
@@ -119,7 +123,8 @@ def create_transaction(
         date=tx_in.date,
         is_manual=True,
         cost_type=c_type,
-        is_accounted=tx_in.is_accounted if tx_in.is_accounted is not None else True
+        is_accounted=tx_in.is_accounted if tx_in.is_accounted is not None else True,
+        spending_nature=spending_nature
     )
     db.add(tx)
     account.balance = Decimal(str(account.balance)) + Decimal(str(tx_in.amount))
@@ -175,6 +180,33 @@ def update_transaction_cost_type(
 
     new_type = payload.cost_type.lower().strip()
     tx.cost_type = "fixa" if "fix" in new_type else "variavel"
+    db.commit()
+    db.refresh(tx)
+
+    cat = db.query(Category).filter(Category.id == tx.category_id).first() if tx.category_id else None
+    acc = db.query(Account).filter(Account.id == tx.account_id).first()
+    res = TransactionResponse.model_validate(tx)
+    res.category_name = cat.name if cat else None
+    res.category_color = cat.color if cat else None
+    res.account_name = acc.name if acc else None
+    return res
+
+@router.patch("/{transaction_id}/spending-nature", response_model=TransactionResponse)
+def update_transaction_spending_nature(
+    transaction_id: int,
+    payload: TransactionUpdateSpendingNature,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    tx = db.query(Transaction).join(Account).filter(
+        Transaction.id == transaction_id,
+        Account.user_id == current_user.id
+    ).first()
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transação não encontrada.")
+
+    new_nature = payload.spending_nature.lower().strip()
+    tx.spending_nature = "futilidade" if "futil" in new_nature else "recorrente"
     db.commit()
     db.refresh(tx)
 
@@ -249,11 +281,21 @@ def get_summary(
     variable_expense = Decimal("0.00")
     fixed_income = Decimal("0.00")
     variable_income = Decimal("0.00")
+    recorrente_expense = Decimal("0.00")
+    futilidade_expense = Decimal("0.00")
+    recorrente_count = 0
+    futilidade_count = 0
+    futilidade_by_cat = {}
 
     for tx, cat_name, cat_color in transactions:
         amt = Decimal(str(tx.amount))
         month_key = tx.date.strftime("%Y-%m")
         c_type = str(getattr(tx, "cost_type", None) or "variavel").lower()
+        s_nature = str(getattr(tx, "spending_nature", None) or "recorrente").lower()
+        if "futil" in s_nature:
+            s_nature = "futilidade"
+        else:
+            s_nature = "recorrente" 
 
         if month_key not in monthly_trend_dict:
             monthly_trend_dict[month_key] = {"month": month_key, "income": Decimal("0"), "expense": Decimal("0"), "fixed_expense": Decimal("0"), "variable_expense": Decimal("0")}
@@ -282,6 +324,14 @@ def get_summary(
                 variable_expense += abs_amt
                 monthly_trend_dict[month_key]["variable_expense"] += abs_amt
 
+            if s_nature == "futilidade":
+                futilidade_expense += abs_amt
+                futilidade_count += 1
+                futilidade_by_cat[c_name] = futilidade_by_cat.get(c_name, Decimal("0.00")) + abs_amt
+            else:
+                recorrente_expense += abs_amt
+                recorrente_count += 1
+
     tot_exp = fixed_expense + variable_expense
     fixed_exp_pct = float(round((fixed_expense / tot_exp * 100), 1)) if tot_exp > 0 else 0.0
     var_exp_pct = float(round((variable_expense / tot_exp * 100), 1)) if tot_exp > 0 else 0.0
@@ -299,6 +349,24 @@ def get_summary(
         "variable_expense_pct": var_exp_pct,
         "fixed_income_pct": fixed_inc_pct,
         "variable_income_pct": var_inc_pct
+    }
+
+    tot_nature = recorrente_expense + futilidade_expense
+    rec_pct = float(round((recorrente_expense / tot_nature * 100), 1)) if tot_nature > 0 else 0.0
+    fut_pct = float(round((futilidade_expense / tot_nature * 100), 1)) if tot_nature > 0 else 0.0
+
+    spending_nature_summary = {
+        "recorrente": float(recorrente_expense),
+        "futilidade": float(futilidade_expense),
+        "total": float(tot_nature),
+        "recorrente_pct": rec_pct,
+        "futilidade_pct": fut_pct,
+        "recorrente_count": recorrente_count,
+        "futilidade_count": futilidade_count,
+        "futilidade_by_category": [
+            {"category": k, "amount": float(v)}
+            for k, v in sorted(futilidade_by_cat.items(), key=lambda x: x[1], reverse=True)
+        ]
     }
 
     expenses_by_cat = []
@@ -321,7 +389,8 @@ def get_summary(
         net_total=total_income - total_expense,
         expenses_by_category=sorted(expenses_by_cat, key=lambda x: x["value"], reverse=True),
         monthly_trend=sorted(list(monthly_trend_dict.values()), key=lambda x: x["month"]),
-        cost_type_summary=cost_type_summary
+        cost_type_summary=cost_type_summary,
+        spending_nature_summary=spending_nature_summary
     )
 
 @router.get("/historical-evolution")
@@ -359,6 +428,11 @@ def get_historical_evolution(
 
         amt = Decimal(str(tx.amount))
         c_type = str(getattr(tx, "cost_type", None) or "variavel").lower()
+        s_nature = str(getattr(tx, "spending_nature", None) or "recorrente").lower()
+        if "futil" in s_nature:
+            s_nature = "futilidade"
+        else:
+            s_nature = "recorrente" 
 
         if amt > 0:
             monthly_data[m_key]["income"] += amt
@@ -486,6 +560,7 @@ def export_transactions_xlsx(
         dt_str = tx.date.strftime("%d/%m/%Y")
         op_type = "Receita" if is_inc else "Despesa"
         cost_t = "Fixa" if "fix" in (tx.cost_type or "").lower() else "Variável"
+        nature_t = "Futilidade" if "futil" in (getattr(tx, "spending_nature", "") or "").lower() else "Recorrente"
         acc_t = "Sim" if (tx.is_accounted is not False) else "Não"
 
         ws.append([
@@ -494,26 +569,27 @@ def export_transactions_xlsx(
             acc_name or "Conta",
             cat_name or "Sem Categoria",
             cost_t,
+            nature_t,
             acc_t,
             op_type,
             amt
         ])
 
-        v_cell = ws.cell(row=row_idx, column=8)
+        v_cell = ws.cell(row=row_idx, column=9)
         v_cell.number_format = "R$ #,##0.00;[Red]-R$ #,##0.00"
         v_cell.alignment = Alignment(horizontal="right")
 
-        for c in range(1, 9):
+        for c in range(1, 10):
             ws.cell(row=row_idx, column=c).border = thin_border
             ws.cell(row=row_idx, column=c).font = regular_font
 
     # Totalizador
     last_row = len(results) + 2
-    ws.append(["", "", "", "", "", "", "Líquido Geral:", f"=SUM(H2:H{last_row - 1})"])
-    ws.cell(row=last_row, column=7).font = bold_font
-    ws.cell(row=last_row, column=7).alignment = Alignment(horizontal="right")
+    ws.append(["", "", "", "", "", "", "", "Líquido Geral:", f"=SUM(I2:I{last_row - 1})"])
     ws.cell(row=last_row, column=8).font = bold_font
-    ws.cell(row=last_row, column=8).number_format = "R$ #,##0.00;[Red]-R$ #,##0.00"
+    ws.cell(row=last_row, column=8).alignment = Alignment(horizontal="right")
+    ws.cell(row=last_row, column=9).font = bold_font
+    ws.cell(row=last_row, column=9).number_format = "R$ #,##0.00;[Red]-R$ #,##0.00"
 
     # Ajuste automático de largura das colunas
     for col in ws.columns:

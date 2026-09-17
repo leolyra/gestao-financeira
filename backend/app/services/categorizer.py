@@ -36,11 +36,12 @@ def auto_categorize(description: str, user_id: int, db: Session) -> Optional[int
     return None
 
 FIXED_EXPENSE_KEYWORDS = [
-    "aluguel", "condominio", "coelba", "enel", "embasa", "luz", "energia", "agua",
+    "aluguel", "condominio", "condominial", "coelba", "enel", "embasa", "luz", "energia", "agua",
     "internet", "claro", "vivo", "tim", "oi fib", "netflix", "spotify", "prime video",
     "disney", "youtube", "plano", "mensalidade", "escola", "faculdade", "academia",
-    "smartfit", "selfit", "seguro", "ipva", "iptu", "assefaz", "unimed", "bradesco saude",
-    "sulamerica", "convenio", "salario", "remuneracao", "pensao"
+    "smartfit", "selfit", "totalpass", "gympass", "ccaa", "seguro", "ipva", "iptu", "assefaz",
+    "unimed", "bradesco saude", "sulamerica", "convenio", "salario", "remuneracao", "pensao",
+    "diarista", "faxina", "google one", "melimais"
 ]
 
 def detect_cost_type(description: str) -> str:

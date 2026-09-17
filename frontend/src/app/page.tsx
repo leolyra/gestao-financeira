@@ -372,6 +372,7 @@ export default function Home() {
   const [filterCostType, setFilterCostType] = useState<'all' | 'fixa' | 'variavel'>('all');
   const [filterAccounted, setFilterAccounted] = useState<'all' | 'yes' | 'no'>('all');
   const [filterPeriod, setFilterPeriod] = useState<string>('current_month');
+  const [filterSearchText, setFilterSearchText] = useState<string>('');
   const [isExportingXlsx, setIsExportingXlsx] = useState<boolean>(false);
 
   // Dashboard Days & Historical Evolution State
@@ -614,6 +615,26 @@ export default function Home() {
       }
     } catch (err: any) {
       alert(`Erro de conexão ao atualizar classificação: ${err.message}`);
+    }
+  }
+
+  async function handleSyncInvestmentsFromOpenFinance() {
+    setIsConnectingPluggy(true);
+    setInvUploadMsg("Sincronizando compras, vendas e proventos das corretoras e bancos via Open Finance...");
+    try {
+      const res = await fetchWithAuth("/open-finance/sync-investments", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setInvUploadMsg(`Aviso: ${data.detail || "Erro ao sincronizar investimentos"}`);
+        return;
+      }
+      setInvUploadMsg(data.message || `Sincronização concluída! ${data.investments_and_proventos_synced} operações e proventos atualizados.`);
+      loadAllData();
+      fetchDividends(dividendPeriod);
+    } catch (err: any) {
+      setInvUploadMsg("Erro na sincronização: " + err.message);
+    } finally {
+      setIsConnectingPluggy(false);
     }
   }
 
@@ -976,6 +997,13 @@ export default function Home() {
       const token = getToken();
       const currentFiltered = transactions.filter(t => {
         if (!matchesPeriod(t.date, filterPeriod)) return false;
+        if (filterSearchText) {
+          const s = filterSearchText.toLowerCase().trim();
+          const matchDesc = (t.description || '').toLowerCase().includes(s);
+          const matchAmt = String(t.amount || '').includes(s);
+          const matchCat = (t.category_name || '').toLowerCase().includes(s);
+          if (!matchDesc && !matchAmt && !matchCat) return false;
+        }
         if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
         if (filterCategory !== 'all') {
           if (filterCategory === 'none' && t.category_id) return false;
@@ -2473,7 +2501,14 @@ export default function Home() {
                 <span className="text-xs text-slate-400">
                   {transactions.filter(t => {
                     if (!matchesPeriod(t.date, filterPeriod)) return false;
-                    if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+                    if (filterSearchText) {
+          const s = filterSearchText.toLowerCase().trim();
+          const matchDesc = (t.description || '').toLowerCase().includes(s);
+          const matchAmt = String(t.amount || '').includes(s);
+          const matchCat = (t.category_name || '').toLowerCase().includes(s);
+          if (!matchDesc && !matchAmt && !matchCat) return false;
+        }
+        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
@@ -2492,6 +2527,15 @@ export default function Home() {
 
               {/* Barra de Filtros Múltiplos: Período, Conta, Categoria, Tipo e Contabilização */}
               <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                {/* Campo de Pesquisa Rápida por Descrição ou Valor */}
+                <input
+                  type="text"
+                  placeholder="Pesquisar por texto ou valor (ex: 818)..."
+                  value={filterSearchText}
+                  onChange={(e) => setFilterSearchText(e.target.value)}
+                  className="px-2.5 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500 placeholder:text-slate-500 w-48 font-mono"
+                  title="Pesquise diretamente por qualquer descrição ou valor de transação"
+                />
                 {/* Filtro por Período Padronizado */}
                 <select
                   value={filterPeriod}
@@ -2577,6 +2621,7 @@ export default function Home() {
                       setFilterCostType('all');
                       setFilterSpendingNature('all');
                       setFilterAccounted('all');
+                      setFilterSearchText('');
                     }}
                     className="px-2 py-1 text-[11px] text-rose-400 hover:text-rose-300 hover:underline transition"
                   >
@@ -2666,7 +2711,14 @@ export default function Home() {
                 <tbody className="divide-y divide-slate-800/60">
                   {transactions.filter(t => {
                     if (!matchesPeriod(t.date, filterPeriod)) return false;
-                    if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+                    if (filterSearchText) {
+          const s = filterSearchText.toLowerCase().trim();
+          const matchDesc = (t.description || '').toLowerCase().includes(s);
+          const matchAmt = String(t.amount || '').includes(s);
+          const matchCat = (t.category_name || '').toLowerCase().includes(s);
+          if (!matchDesc && !matchAmt && !matchCat) return false;
+        }
+        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
@@ -2866,6 +2918,17 @@ export default function Home() {
                     <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadSpreadsheet} className="hidden" />
                   </label>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={handleSyncInvestmentsFromOpenFinance}
+                  disabled={isConnectingPluggy || isRecalculating}
+                  className="w-full px-2 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50"
+                  title="Buscar compras, vendas e proventos das corretoras e contas conectadas via Open Finance (Pluggy)"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isConnectingPluggy ? "animate-spin" : ""}`} />
+                  <span>Sincronizar Open Finance (Compras, Vendas & Proventos)</span>
+                </button>
 
                 <button
                   type="button"
@@ -3085,8 +3148,26 @@ export default function Home() {
                 </div>
               </div>
             ) : (
-              <div className="p-6 text-center bg-slate-950/40 border border-dashed border-slate-800 rounded-xl text-slate-500 text-xs">
-                Nenhum provento ou dividendo registrado no período selecionado ({getPeriodLabel(dividendPeriod)}).
+              <div className="p-6 text-center bg-slate-950/40 border border-dashed border-slate-800 rounded-xl text-slate-400 text-xs space-y-2.5">
+                <p className="text-slate-400">Nenhum provento ou dividendo creditado no período selecionado ({getPeriodLabel(dividendPeriod)}).</p>
+                <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => fetchDividends('all')}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition shadow-sm"
+                  >
+                    Ver Todo o Histórico
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSyncInvestmentsFromOpenFinance}
+                    disabled={isConnectingPluggy}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isConnectingPluggy ? 'animate-spin' : ''}`} />
+                    <span>Sincronizar Proventos via Open Finance</span>
+                  </button>
+                </div>
               </div>
             )}
 

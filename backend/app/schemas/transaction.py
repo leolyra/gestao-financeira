@@ -47,6 +47,8 @@ class DashboardSummary(BaseModel):
     monthly_trend: List[Dict[str, Any]]
     cost_type_summary: Optional[Dict[str, Any]] = None
     spending_nature_summary: Optional[Dict[str, Any]] = None
+    ignored_transactions_count: Optional[int] = 0
+    ignored_transactions_amount: Optional[Decimal] = Decimal("0.00")
 
 class ExportXlsxPayload(BaseModel):
     transaction_ids: Optional[List[int]] = None

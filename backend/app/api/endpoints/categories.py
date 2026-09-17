@@ -45,7 +45,7 @@ def list_categories(
         Transaction.amount
     ).join(Account, Transaction.account_id == Account.id).filter(
         Account.user_id == current_user.id,
-        Transaction.is_accounted.is_(True)
+        Transaction.is_accounted == True
     )
 
     if p_start:

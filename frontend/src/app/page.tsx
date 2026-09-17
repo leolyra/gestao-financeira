@@ -260,6 +260,8 @@ interface DashboardSummary {
     futilidade_count: number;
     futilidade_by_category: { category: string; amount: number }[];
   };
+  ignored_transactions_count?: number;
+  ignored_transactions_amount?: number;
 }
 
 export default function Home() {
@@ -369,12 +371,12 @@ export default function Home() {
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterCostType, setFilterCostType] = useState<'all' | 'fixa' | 'variavel'>('all');
   const [filterAccounted, setFilterAccounted] = useState<'all' | 'yes' | 'no'>('all');
-  const [filterPeriod, setFilterPeriod] = useState<string>('all');
+  const [filterPeriod, setFilterPeriod] = useState<string>('current_month');
   const [isExportingXlsx, setIsExportingXlsx] = useState<boolean>(false);
 
   // Dashboard Days & Historical Evolution State
-  const [dashboardPeriod, setDashboardPeriod] = useState<string>('90d');
-  const [categoryPeriod, setCategoryPeriod] = useState<string>('all');
+  const [dashboardPeriod, setDashboardPeriod] = useState<string>('current_month');
+  const [categoryPeriod, setCategoryPeriod] = useState<string>('current_month');
   const [isLoadingCategories, setIsLoadingCategories] = useState<boolean>(false);
   const [historicalMonths, setHistoricalMonths] = useState<number>(12);
   const [historicalData, setHistoricalData] = useState<any>(null);
@@ -927,6 +929,8 @@ export default function Home() {
         if (sumRes.ok) setSummary(await sumRes.json());
         const catRes = await fetchWithAuth(`/categories/?period=${categoryPeriod}`);
         if (catRes.ok) setCategories(await catRes.json());
+        const accRes = await fetchWithAuth('/accounts/');
+        if (accRes.ok) setAccounts(await accRes.json());
       } else {
         const err = await res.json().catch(() => ({}));
         alert(`Aviso: O backend não conseguiu salvar o tipo de custo. Detalhes: ${err.detail || res.statusText}`);
@@ -1070,6 +1074,8 @@ export default function Home() {
         if (sumRes.ok) setSummary(await sumRes.json());
         const catRes = await fetchWithAuth(`/categories/?period=${categoryPeriod}`);
         if (catRes.ok) setCategories(await catRes.json());
+        const accRes = await fetchWithAuth('/accounts/');
+        if (accRes.ok) setAccounts(await accRes.json());
       } else {
         const err = await res.json().catch(() => ({}));
         alert(`Aviso: O backend não conseguiu atualizar a contabilização. Detalhes: ${err.detail || res.statusText}. Verifique se o container api foi atualizado.`);
@@ -1734,6 +1740,24 @@ export default function Home() {
               <ArrowUpRight className="w-3.5 h-3.5 text-indigo-400" />
             </button>
           </div>
+
+          {/* Banner de Transações Não Contabilizadas (Desconsideradas) */}
+          {(summary?.ignored_transactions_count ?? 0) > 0 && (
+            <div className="p-3.5 bg-slate-900/90 border border-amber-500/30 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-2.5 w-2.5 relative shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                </span>
+                <span className="text-xs text-slate-300">
+                  <strong>Filtro de Contabilização:</strong> <span className="font-bold text-amber-400">{summary?.ignored_transactions_count} lançamento(s)</span> marcados como "Não contabilizar" (total de <span className="font-mono font-bold text-amber-300">R$ {Number(summary?.ignored_transactions_amount || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>) foram <strong>100% desconsiderados</strong> de todas as somas de receitas, despesas e saldos do Dashboard.
+                </span>
+              </div>
+              <span className="text-[10px] uppercase font-bold text-amber-400 font-mono bg-amber-400/10 px-2.5 py-1 rounded-full border border-amber-400/20 whitespace-nowrap">
+                Ignorados nos Totais
+              </span>
+            </div>
+          )}
 
           {/* Cards Principais */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

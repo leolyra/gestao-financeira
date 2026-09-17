@@ -127,7 +127,8 @@ def create_transaction(
         spending_nature=spending_nature
     )
     db.add(tx)
-    account.balance = Decimal(str(account.balance)) + Decimal(str(tx_in.amount))
+    if tx.is_accounted:
+        account.balance = Decimal(str(account.balance)) + Decimal(str(tx_in.amount))
     db.commit()
     db.refresh(tx)
 
@@ -263,7 +264,7 @@ def get_summary(
         p_start = datetime.utcnow() - timedelta(days=90)
 
     tx_query = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
-        .filter(Account.user_id == current_user.id, Transaction.is_accounted.is_(True))
+        .filter(Account.user_id == current_user.id, Transaction.is_accounted == True)
 
     if p_start:
         tx_query = tx_query.filter(Transaction.date >= p_start)
@@ -271,6 +272,17 @@ def get_summary(
         tx_query = tx_query.filter(Transaction.date <= p_end)
 
     transactions = tx_query.all()
+
+    # Identifica e soma transações desconsideradas no período
+    ign_query = db.query(Transaction).join(Account)\
+        .filter(Account.user_id == current_user.id, Transaction.is_accounted == False)
+    if p_start:
+        ign_query = ign_query.filter(Transaction.date >= p_start)
+    if p_end:
+        ign_query = ign_query.filter(Transaction.date <= p_end)
+    ignored_txs = ign_query.all()
+    ignored_count = len(ignored_txs)
+    ignored_amount = sum((abs(t.amount) for t in ignored_txs), Decimal("0.00"))
 
     total_income = Decimal("0.00")
     total_expense = Decimal("0.00")
@@ -390,7 +402,9 @@ def get_summary(
         expenses_by_category=sorted(expenses_by_cat, key=lambda x: x["value"], reverse=True),
         monthly_trend=sorted(list(monthly_trend_dict.values()), key=lambda x: x["month"], reverse=True),
         cost_type_summary=cost_type_summary,
-        spending_nature_summary=spending_nature_summary
+        spending_nature_summary=spending_nature_summary,
+        ignored_transactions_count=ignored_count,
+        ignored_transactions_amount=ignored_amount
     )
 
 @router.get("/historical-evolution")
@@ -405,7 +419,7 @@ def get_historical_evolution(
         since_date = datetime.utcnow() - timedelta(days=months * 31)
 
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
-        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted.is_(True))\
+        .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True)\
         .order_by(Transaction.date.asc()).all()
 
     monthly_data = {}
@@ -544,7 +558,7 @@ def export_transactions_xlsx(
 
     headers = [
         "Data", "Descrição", "Conta", "Categoria", 
-        "Tipo de Custo", "Contabilizado", "Operação", "Valor (R$)"
+        "Tipo de Custo", "Natureza", "Contabilizado", "Operação", "Valor (R$)"
     ]
     ws.append(headers)
 

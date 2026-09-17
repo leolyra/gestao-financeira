@@ -388,7 +388,7 @@ def get_summary(
         total_expense=total_expense,
         net_total=total_income - total_expense,
         expenses_by_category=sorted(expenses_by_cat, key=lambda x: x["value"], reverse=True),
-        monthly_trend=sorted(list(monthly_trend_dict.values()), key=lambda x: x["month"]),
+        monthly_trend=sorted(list(monthly_trend_dict.values()), key=lambda x: x["month"], reverse=True),
         cost_type_summary=cost_type_summary,
         spending_nature_summary=spending_nature_summary
     )
@@ -448,7 +448,7 @@ def get_historical_evolution(
                 monthly_data[m_key]["categories"][c_name] = Decimal("0.00")
             monthly_data[m_key]["categories"][c_name] += abs_amt
 
-    sorted_months = sorted(monthly_data.keys())
+    sorted_months = sorted(monthly_data.keys(), reverse=True)
     months_list = []
     tot_income = Decimal("0.00")
     tot_expense = Decimal("0.00")

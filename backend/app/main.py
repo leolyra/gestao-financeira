@@ -25,7 +25,7 @@ def run_migrations():
 Base.metadata.create_all(bind=engine)
 run_migrations()
 
-app = FastAPI(title=settings.PROJECT_NAME, version="2.0.0")
+app = FastAPI(title=settings.PROJECT_NAME, version="2.1.0")
 
 app.add_middleware(
     CORSMiddleware,

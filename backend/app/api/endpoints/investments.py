@@ -340,7 +340,7 @@ async def upload_spreadsheet(
         row_date = datetime.utcnow()
         if col_date and pd.notna(row[col_date]):
             try:
-                row_date = pd.to_datetime(row[col_date]).to_pydatetime()
+                row_date = pd.to_datetime(row[col_date], dayfirst=True).to_pydatetime()
             except Exception:
                 row_date = datetime.utcnow()
 
@@ -458,7 +458,7 @@ def get_dividends_by_period(
     p_start, p_end = resolve_date_range(p_code)
     p_label = PERIOD_LABELS.get(p_code, "Período Selecionado")
 
-    # 1. Proventos do módulo de investimentos (InvestmentTransaction)
+    # Proventos do módulo de investimentos (InvestmentTransaction)
     inv_query = db.query(InvestmentTransaction, Asset)\
         .join(Asset, InvestmentTransaction.asset_id == Asset.id)\
         .filter(
@@ -471,36 +471,17 @@ def get_dividends_by_period(
     if p_end:
         inv_query = inv_query.filter(InvestmentTransaction.trade_date <= p_end)
 
-    inv_dividends = inv_query.order_by(InvestmentTransaction.trade_date.desc()).all()
-
-    # 2. Proventos de extratos bancários (Transaction com categoria Proventos / Dividendos)
-    bank_query = db.query(Transaction)\
-        .join(Account, Transaction.account_id == Account.id)\
-        .outerjoin(Category, Transaction.category_id == Category.id)\
-        .filter(
-            Account.user_id == current_user.id,
-            (Category.name.ilike("%dividendo%") | Category.name.ilike("%provento%") | Transaction.description.ilike("%dividendo%") | Transaction.description.ilike("%jcp%") | Transaction.description.ilike("%rendimento b3%")),
-            Transaction.amount > 0,
-            Transaction.is_accounted.is_(True)
-        )
-
-    if p_start:
-        bank_query = bank_query.filter(Transaction.date >= p_start)
-    if p_end:
-        bank_query = bank_query.filter(Transaction.date <= p_end)
-
-    bank_txs = bank_query.order_by(Transaction.date.desc()).all()
+    inv_dividends = inv_query.order_by(InvestmentTransaction.trade_date.desc(), InvestmentTransaction.id.desc()).all()
 
     items: List[DividendItem] = []
-    seen_signatures = set()
 
     for tx, asset in inv_dividends:
         norm_type = normalize_asset_class(asset.asset_type)
         if norm_type == "Renda Fixa":
             continue
+
         amt = Decimal(str(tx.total_amount or 0))
-        dt_key = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else "no-date"
-        seen_signatures.add((dt_key, round(float(amt), 2)))
+        amt = abs(amt)
 
         op_display = "Dividendo"
         if tx.operation_type.lower() == "jcp":
@@ -508,7 +489,7 @@ def get_dividends_by_period(
         elif tx.operation_type.lower() == "rendimento":
             op_display = "Rendimento FII"
 
-        src_display = "Nota Sinacor B3" if tx.source == "pdf_sinacor" else ("Planilha" if tx.source == "spreadsheet" else "Manual (Carteira)")
+        src_display = "Nota Sinacor B3" if tx.source == "pdf_sinacor" else ("Planilha" if tx.source == "spreadsheet" else "Manual")
 
         items.append(DividendItem(
             id=tx.id,
@@ -524,33 +505,7 @@ def get_dividends_by_period(
             notes=tx.notes
         ))
 
-    for btx in bank_txs:
-        b_amt = Decimal(str(btx.amount or 0))
-        b_dt = btx.date.strftime("%Y-%m-%d") if btx.date else "no-date"
-        sig = (b_dt, round(float(b_amt), 2))
-        if sig in seen_signatures:
-            continue
-
-        m = re.search(r"\b([A-Z]{4}[0-9]{1,2}[A-Z]?)\b", btx.description.upper())
-        t_found = m.group(1) if m else "PROVENTO"
-        a_class = normalize_asset_class(guess_asset_type(t_found) if m else "Ações")
-        if a_class == "Renda Fixa":
-            continue
-
-        items.append(DividendItem(
-            id=-btx.id,
-            trade_date=btx.date,
-            ticker=t_found,
-            asset_name=btx.description,
-            asset_type=normalize_asset_class(a_class),
-            operation_type="Provento Bancário",
-            total_amount=b_amt,
-            quantity=Decimal("0"),
-            unit_price=Decimal("0"),
-            source="Extrato Bancário",
-            notes="Conta Corrente"
-        ))
-
+    # Ordena por data decrescente (mais recente primeiro)
     items.sort(key=lambda x: x.trade_date, reverse=True)
 
     total_amount = sum((it.total_amount for it in items), Decimal("0.00"))

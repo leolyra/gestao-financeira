@@ -78,6 +78,28 @@ interface Category {
   transactions_count?: number;
 }
 
+interface TxColWidths {
+  date: number;
+  description: number;
+  account: number;
+  category: number;
+  costType: number;
+  nature: number;
+  accounted: number;
+  amount: number;
+}
+
+const DEFAULT_TX_COL_WIDTHS: TxColWidths = {
+  date: 95,
+  description: 240,
+  account: 115,
+  category: 135,
+  costType: 95,
+  nature: 105,
+  accounted: 90,
+  amount: 110,
+};
+
 interface Transaction {
   id: number;
   account_id: number;
@@ -301,6 +323,7 @@ export default function Home() {
   const [showChangelogModal, setShowChangelogModal] = useState<boolean>(false);
   const [newTxSpendingNature, setNewTxSpendingNature] = useState<'recorrente' | 'futilidade'>('recorrente');
   const [filterSpendingNature, setFilterSpendingNature] = useState<'all' | 'recorrente' | 'futilidade'>('all');
+  const [txColWidths, setTxColWidths] = useState<TxColWidths>(DEFAULT_TX_COL_WIDTHS);
 
 
   // Modais de Investimento
@@ -735,6 +758,26 @@ export default function Home() {
       console.error(err);
     }
   }
+
+  const handleStartColResize = (e: React.MouseEvent, colKey: keyof TxColWidths) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = txColWidths[colKey];
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const newWidth = Math.max(50, startWidth + delta);
+      setTxColWidths(prev => ({ ...prev, [colKey]: newWidth }));
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  };
 
   async function handleUpdateSpendingNature(txId: number, spendingNature: string) {
     try {
@@ -1211,7 +1254,7 @@ export default function Home() {
                   <div className="flex items-center gap-2">
                     <h2 className="text-base font-bold text-white">Histórico de Versões & Novidades</h2>
                     <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      v2.0
+                      v2.1
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
@@ -1230,16 +1273,39 @@ export default function Home() {
 
             {/* Modal Body: Timeline de Versões */}
             <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-300">
-              {/* VERSÃO 2.0 (ATUAL) */}
+              {/* VERSÃO 2.1 (ATUAL) */}
               <div className="relative pl-6 border-l-2 border-indigo-500 space-y-2">
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-indigo-500 ring-4 ring-slate-900 flex items-center justify-center">
                   <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-bold text-white text-sm">Versão 2.0</span>
+                  <span className="font-bold text-white text-sm">Versão 2.1</span>
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">
                     Versão Atual
                   </span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  Refinamento e correções prioritárias de visualização, ordenação e cálculo de proventos:
+                </p>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-300 ml-1">
+                  <li>
+                    <strong className="text-white">Correção de Proventos por Período:</strong> Revisão profunda do cálculo de dividendos com vinculação estrita à carteira de investimentos (expurgando depósitos bancários, salários e contas remuneradas) e limites temporais fechados para o mês atual.
+                  </li>
+                  <li>
+                    <strong className="text-white">Histórico em Ordem Decrescente:</strong> As consultas de dados históricos (Evolução Mensal, Matriz Financeira e Histórico de Proventos) agora exibem o mês atual no topo/início, seguido pelos meses mais antigos.
+                  </li>
+                  <li>
+                    <strong className="text-white">Colunas Redimensionáveis & Responsivas:</strong> Tabela de transações com controle interativo de largura por arrasto de mouse nas bordas das colunas e ajuste automático para que a coluna Valor fique sempre 100% visível na tela.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 2.0 */}
+              <div className="relative pl-6 border-l-2 border-slate-700 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-700 ring-4 ring-slate-900"></div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 2.0</span>
                   <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
                 </div>
                 <p className="text-slate-400 leading-relaxed">
@@ -1355,7 +1421,7 @@ export default function Home() {
               className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30 hover:text-indigo-300 border border-indigo-500/30 transition cursor-pointer shadow-sm flex items-center gap-1"
               title="Clique para ver o resumo das versões e novidades (Changelog)"
             >
-              <span>v2.0</span>
+              <span>v2.1</span>
               <Sparkles className="w-3 h-3 text-indigo-400" />
             </button>
           </div>
@@ -2380,6 +2446,16 @@ export default function Home() {
                   </button>
                 )}
 
+                {/* Botão Redefinir Largura das Colunas */}
+                <button
+                  type="button"
+                  onClick={() => setTxColWidths(DEFAULT_TX_COL_WIDTHS)}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-medium transition"
+                  title="Redefinir larguras padrão das colunas da tabela"
+                >
+                  Ajustar Colunas
+                </button>
+
                 {/* Botão Exportar Excel .XLSX */}
                 <button
                   type="button"
@@ -2394,18 +2470,59 @@ export default function Home() {
               </div>
             </div>
 
+            {/* Tabela com Colunas Ajustáveis (Redimensionáveis por Arrasto) */}
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm text-slate-300">
-                <thead className="bg-slate-950 text-slate-400 text-xs uppercase tracking-wider border-b border-slate-800">
+              <table className="w-full text-left text-xs text-slate-300 table-fixed" style={{ minWidth: '950px' }}>
+                <thead className="bg-slate-950 text-slate-400 text-[11px] uppercase tracking-wider border-b border-slate-800 select-none">
                   <tr>
-                    <th className="py-3 px-4">Data</th>
-                    <th className="py-3 px-4">Descrição</th>
-                    <th className="py-3 px-4">Conta</th>
-                    <th className="py-3 px-4">Categoria</th>
-                    <th className="py-3 px-4">Tipo</th>
-                    <th className="py-3 px-4">Natureza</th>
-                    <th className="py-3 px-4 text-center" title="Se ativado, entra nos totais do Dashboard">Contabilizar</th>
-                    <th className="py-3 px-4 text-right">Valor</th>
+                    <th style={{ width: `${txColWidths.date}px` }} className="relative py-2.5 px-3 whitespace-nowrap">
+                      <span>Data</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'date')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Data"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.description}px` }} className="relative py-2.5 px-3">
+                      <span>Descrição</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'description')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Descrição"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.account}px` }} className="relative py-2.5 px-3 whitespace-nowrap">
+                      <span>Conta</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'account')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Conta"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.category}px` }} className="relative py-2.5 px-3 whitespace-nowrap">
+                      <span>Categoria</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'category')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Categoria"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.costType}px` }} className="relative py-2.5 px-3 whitespace-nowrap">
+                      <span>Tipo</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'costType')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Tipo"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.nature}px` }} className="relative py-2.5 px-3 whitespace-nowrap">
+                      <span>Natureza</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'nature')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Natureza"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.accounted}px` }} className="relative py-2.5 px-2 text-center whitespace-nowrap" title="Se ativado, entra nos totais do Dashboard">
+                      <span>Contabilizar</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'accounted')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Contabilizar"></div>
+                    </th>
+                    <th style={{ width: `${txColWidths.amount}px` }} className="relative py-2.5 px-3 text-right whitespace-nowrap">
+                      <span>Valor</span>
+                      <div
+                        onMouseDown={(e) => handleStartColResize(e, 'amount')}
+                        className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-indigo-500/80 active:bg-indigo-500 z-10" title="Arraste para ajustar largura da coluna Valor"></div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">
@@ -2429,32 +2546,41 @@ export default function Home() {
                     const isAcc = tx.is_accounted ?? true;
                     return (
                       <tr key={tx.id} className={`hover:bg-slate-800/30 transition ${!isAcc ? 'opacity-60 bg-slate-950/40' : ''}`}>
-                        <td className="py-3 px-4 text-xs whitespace-nowrap text-slate-400">
+                        {/* Data */}
+                        <td style={{ width: `${txColWidths.date}px` }} className="py-2.5 px-3 text-xs whitespace-nowrap text-slate-400 font-mono">
                           {new Date(tx.date).toLocaleDateString('pt-BR')}
                         </td>
-                        <td className={`py-3 px-4 font-medium ${!isAcc ? 'text-slate-400' : 'text-white'}`}>
-                          <div className="flex items-center gap-2">
-                            <span className={!isAcc ? 'line-through opacity-80' : ''}>{tx.description}</span>
+
+                        {/* Descrição com truncate e tooltip */}
+                        <td style={{ width: `${txColWidths.description}px` }} className="py-2.5 px-3 font-medium truncate" title={tx.description}>
+                          <div className="flex items-center gap-1.5 truncate">
+                            <span className={`truncate text-xs ${!isAcc ? 'line-through opacity-80 text-slate-400' : 'text-white'}`}>
+                              {tx.description}
+                            </span>
                             {!tx.is_manual && (
-                              <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 text-[10px] rounded border border-emerald-500/20">
-                                Open Finance
+                              <span className="shrink-0 px-1 py-0.2 bg-emerald-500/10 text-emerald-400 text-[9px] rounded border border-emerald-500/20">
+                                OF
                               </span>
                             )}
                             {!isAcc && (
-                              <span className="px-1.5 py-0.5 bg-slate-800 text-slate-400 text-[10px] rounded border border-slate-700">
+                              <span className="shrink-0 px-1 py-0.2 bg-slate-800 text-slate-400 text-[9px] rounded border border-slate-700">
                                 Ignorado
                               </span>
                             )}
                           </div>
                         </td>
-                        <td className="py-3 px-4 text-xs text-slate-400 whitespace-nowrap">
-                          {tx.account_name || 'Conta Padrão'}
+
+                        {/* Conta */}
+                        <td style={{ width: `${txColWidths.account}px` }} className="py-2.5 px-3 text-xs text-slate-400 truncate" title={tx.account_name || 'Conta Padrão'}>
+                          <span className="truncate block">{tx.account_name || 'Conta Padrão'}</span>
                         </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
+
+                        {/* Categoria */}
+                        <td style={{ width: `${txColWidths.category}px` }} className="py-2.5 px-2 whitespace-nowrap">
                           <select
                             value={tx.category_id || ''}
                             onChange={(e) => handleUpdateCategory(tx.id, e.target.value ? Number(e.target.value) : null)}
-                            className="px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                            className="w-full px-2 py-1 bg-slate-800 border border-slate-700 rounded text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer truncate"
                           >
                             <option value="">Sem Categoria</option>
                             {categories.map((c) => (
@@ -2462,11 +2588,13 @@ export default function Home() {
                             ))}
                           </select>
                         </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
+
+                        {/* Tipo (Fixa / Variável) */}
+                        <td style={{ width: `${txColWidths.costType}px` }} className="py-2.5 px-2 whitespace-nowrap">
                           <select
                             value={tx.cost_type || 'variavel'}
                             onChange={(e) => handleUpdateCostType(tx.id, e.target.value)}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border focus:outline-none transition shadow-sm ${
+                            className={`w-full px-2 py-1 rounded text-xs font-semibold cursor-pointer border focus:outline-none transition shadow-sm ${
                               tx.cost_type === 'fixa'
                                 ? 'bg-purple-950/70 border-purple-600/50 text-purple-300 hover:bg-purple-900/60'
                                 : 'bg-amber-950/70 border-amber-600/50 text-amber-300 hover:bg-amber-900/60'
@@ -2476,11 +2604,13 @@ export default function Home() {
                             <option value="fixa">Fixa</option>
                           </select>
                         </td>
-                        <td className="py-3 px-4 whitespace-nowrap">
+
+                        {/* Natureza (Recorrente / Futilidade) */}
+                        <td style={{ width: `${txColWidths.nature}px` }} className="py-2.5 px-2 whitespace-nowrap">
                           <select
                             value={tx.spending_nature || 'recorrente'}
                             onChange={(e) => handleUpdateSpendingNature(tx.id, e.target.value)}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer border focus:outline-none transition shadow-sm ${
+                            className={`w-full px-2 py-1 rounded text-xs font-semibold cursor-pointer border focus:outline-none transition shadow-sm ${
                               tx.spending_nature === 'futilidade'
                                 ? 'bg-rose-950/70 border-rose-600/50 text-rose-300 hover:bg-rose-900/60'
                                 : 'bg-blue-950/70 border-blue-600/50 text-blue-300 hover:bg-blue-900/60'
@@ -2491,25 +2621,29 @@ export default function Home() {
                             <option value="futilidade">Futilidade</option>
                           </select>
                         </td>
-                        <td className="py-3 px-4 text-center whitespace-nowrap">
+
+                        {/* Contabilizar (Sim / Não) */}
+                        <td style={{ width: `${txColWidths.accounted}px` }} className="py-2.5 px-2 text-center whitespace-nowrap">
                           <button
                             type="button"
                             onClick={() => handleToggleAccounted(tx.id, tx.is_accounted ?? true)}
                             title={(tx.is_accounted ?? true) ? "Contabilizado no Dashboard (clique para ignorar)" : "Ignorado no Dashboard (clique para contabilizar)"}
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition shadow-sm ${
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold border transition shadow-sm ${
                               (tx.is_accounted ?? true)
                                 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
                                 : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
                             }`}
                           >
                             {(tx.is_accounted ?? true) ? (
-                              <><CheckCircle className="w-3.5 h-3.5" /> <span>Sim</span></>
+                              <><CheckCircle className="w-3 h-3" /> <span>Sim</span></>
                             ) : (
                               <><span className="text-[10px] font-bold">✕</span> <span>Não</span></>
                             )}
                           </button>
                         </td>
-                        <td className={`py-3 px-4 text-right font-bold whitespace-nowrap ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
+
+                        {/* Valor (Sempre visível à direita) */}
+                        <td style={{ width: `${txColWidths.amount}px` }} className={`py-2.5 px-3 text-right font-bold text-xs whitespace-nowrap font-mono ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {isIncome ? '+' : ''} R$ {Number(tx.amount).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </td>
                       </tr>
@@ -3823,7 +3957,7 @@ export default function Home() {
                   <div className="flex items-center gap-2">
                     <h2 className="text-base font-bold text-white">Histórico de Versões & Novidades</h2>
                     <span className="px-2.5 py-0.5 text-xs font-bold rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                      v2.0
+                      v2.1
                     </span>
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
@@ -3842,16 +3976,39 @@ export default function Home() {
 
             {/* Modal Body: Timeline de Versões */}
             <div className="p-6 overflow-y-auto space-y-6 text-xs text-slate-300">
-              {/* VERSÃO 2.0 (ATUAL) */}
+              {/* VERSÃO 2.1 (ATUAL) */}
               <div className="relative pl-6 border-l-2 border-indigo-500 space-y-2">
                 <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-indigo-500 ring-4 ring-slate-900 flex items-center justify-center">
                   <span className="w-1.5 h-1.5 rounded-full bg-white"></span>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-bold text-white text-sm">Versão 2.0</span>
+                  <span className="font-bold text-white text-sm">Versão 2.1</span>
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold">
                     Versão Atual
                   </span>
+                  <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  Refinamento e correções prioritárias de visualização, ordenação e cálculo de proventos:
+                </p>
+                <ul className="space-y-1.5 list-disc list-inside text-slate-300 ml-1">
+                  <li>
+                    <strong className="text-white">Correção de Proventos por Período:</strong> Revisão profunda do cálculo de dividendos com vinculação estrita à carteira de investimentos (expurgando depósitos bancários, salários e contas remuneradas) e limites temporais fechados para o mês atual.
+                  </li>
+                  <li>
+                    <strong className="text-white">Histórico em Ordem Decrescente:</strong> As consultas de dados históricos (Evolução Mensal, Matriz Financeira e Histórico de Proventos) agora exibem o mês atual no topo/início, seguido pelos meses mais antigos.
+                  </li>
+                  <li>
+                    <strong className="text-white">Colunas Redimensionáveis & Responsivas:</strong> Tabela de transações com controle interativo de largura por arrasto de mouse nas bordas das colunas e ajuste automático para que a coluna Valor fique sempre 100% visível na tela.
+                  </li>
+                </ul>
+              </div>
+
+              {/* VERSÃO 2.0 */}
+              <div className="relative pl-6 border-l-2 border-slate-700 space-y-2">
+                <div className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-700 ring-4 ring-slate-900"></div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-200 text-sm">Versão 2.0</span>
                   <span className="text-slate-500 text-[11px]">Setembro / 2026</span>
                 </div>
                 <p className="text-slate-400 leading-relaxed">

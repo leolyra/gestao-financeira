@@ -1,14 +1,14 @@
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 import pandas as pd
 import io
 import re
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, text
 from app.core.database import get_db
-from app.models.entities import Asset, AssetTickerHistory, InvestmentTransaction, User, Transaction, Account, Category
+from app.models.entities import Asset, AssetTickerHistory, InvestmentTransaction, User
 from app.schemas.investment import (
     InvestmentTransactionCreate,
     InvestmentTransactionResponse,
@@ -34,6 +34,24 @@ ALLOWED_ASSET_CLASSES = [
     "Renda Fixa",
     "Criptos"
 ]
+
+def parse_br_decimal(val) -> Decimal:
+    if val is None or pd.isna(val):
+        return Decimal("0.00")
+    if isinstance(val, (int, float)):
+        return Decimal(str(val))
+    s = str(val).strip()
+    if not s or s.lower() == "nan":
+        return Decimal("0.00")
+    s = s.replace("R$", "").replace(" ", "").strip()
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0.00")
 
 def normalize_asset_class(raw_class: Optional[str]) -> str:
     if not raw_class:
@@ -144,6 +162,7 @@ def get_portfolio(
         avg_price = Decimal("0.00")
         total_divs = Decimal("0.00")
 
+        # Proventos deste ativo
         if asset_type != "Renda Fixa":
             seen_div_events = set()
             for tx in asset_txs:
@@ -166,6 +185,7 @@ def get_portfolio(
                             seen_div_events.add(key)
                             total_divs += amt
 
+        # Se há compras/vendas manuais, sinacor ou de planilha:
         if trade_txs:
             for tx in trade_txs:
                 op = (tx.operation_type or "").lower().strip()
@@ -176,15 +196,17 @@ def get_portfolio(
 
                 if op in ["buy", "compra"]:
                     if qty > 0:
-                        if total_amt > 0:
-                            buy_val = total_amt
+                        if total_amt > 0 and abs(total_amt - (qty * unit_p)) <= (costs + Decimal("1.00")):
+                            trade_cost = total_amt
                         elif unit_p > 0:
-                            buy_val = (qty * unit_p) + costs
+                            trade_cost = (qty * unit_p) + costs
+                        elif total_amt > 0:
+                            trade_cost = total_amt
                         else:
-                            buy_val = Decimal("0.00")
+                            trade_cost = Decimal("0.00")
 
                         new_qty = total_qty + qty
-                        new_cost = total_cost + buy_val
+                        new_cost = total_cost + trade_cost
                         total_qty = new_qty
                         total_cost = new_cost
                         avg_price = (new_cost / new_qty).quantize(Decimal("0.01")) if new_qty > 0 else Decimal("0.00")
@@ -244,10 +266,19 @@ def list_investment_transactions(
     if operation_type:
         query = query.filter(InvestmentTransaction.operation_type == operation_type.lower())
 
-    results = query.order_by(InvestmentTransaction.trade_date.desc()).limit(200).all()
+    results = query.order_by(InvestmentTransaction.trade_date.desc(), InvestmentTransaction.id.desc()).limit(300).all()
 
     response = []
     for tx, t_code, a_name, a_type in results:
+        amt = Decimal(str(tx.total_amount or 0))
+        q = Decimal(str(tx.quantity or 0))
+        u = Decimal(str(tx.unit_price or 0))
+        op = (tx.operation_type or "").lower()
+
+        # Sanity check no retorno da listagem
+        if op in ["dividend", "jcp", "rendimento"] and q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
+            amt = u
+
         item = InvestmentTransactionResponse(
             id=tx.id,
             asset_id=tx.asset_id,
@@ -255,10 +286,10 @@ def list_investment_transactions(
             asset_name=a_name,
             asset_type=normalize_asset_class(a_type),
             operation_type=tx.operation_type,
-            quantity=tx.quantity,
-            unit_price=tx.unit_price,
-            costs=tx.costs,
-            total_amount=tx.total_amount,
+            quantity=q,
+            unit_price=u,
+            costs=tx.costs or Decimal("0.00"),
+            total_amount=amt,
             trade_date=tx.trade_date,
             source=tx.source,
             notes=tx.notes
@@ -274,14 +305,31 @@ def create_investment_transaction(
 ):
     asset = get_or_create_asset(tx_in.ticker, None, tx_in.asset_type, db)
 
+    q = Decimal(str(tx_in.quantity or 0))
+    u = Decimal(str(tx_in.unit_price or 0))
+    c = Decimal(str(tx_in.costs or 0))
+    t = Decimal(str(tx_in.total_amount or 0))
+    op = (tx_in.operation_type or "buy").lower().strip()
+
+    if op in ["dividend", "jcp", "rendimento"]:
+        # Para proventos, total_amount é o montante financeiro líquido recebido
+        final_total = t if t > 0 else (u if u > 0 else q)
+        final_unit = (final_total / q).quantize(Decimal("0.0001")) if q > 0 else final_total
+    elif op in ["buy", "compra"]:
+        final_total = t if t > 0 else (q * u + c)
+        final_unit = u if u > 0 else (final_total / q if q > 0 else Decimal("0.00"))
+    else:
+        final_total = t if t > 0 else (q * u - c)
+        final_unit = u if u > 0 else (final_total / q if q > 0 else Decimal("0.00"))
+
     tx = InvestmentTransaction(
         user_id=current_user.id,
         asset_id=asset.id,
-        operation_type=tx_in.operation_type.lower(),
-        quantity=tx_in.quantity,
-        unit_price=tx_in.unit_price,
-        costs=tx_in.costs,
-        total_amount=tx_in.total_amount,
+        operation_type=op,
+        quantity=q,
+        unit_price=final_unit,
+        costs=c,
+        total_amount=final_total,
         trade_date=tx_in.trade_date,
         source="manual",
         notes=tx_in.notes
@@ -328,6 +376,21 @@ async def upload_sinacor_note(
     inserted_count = 0
     for op in ops:
         asset = get_or_create_asset(op["ticker"], op.get("asset_name"), op.get("asset_type"), db)
+        
+        # Deduplicação: verifica se já existe exatamente essa operação desta nota
+        note_tag = f"Nota B3 #{note_num}" if note_num else "Nota B3 Sinacor"
+        existing = db.query(InvestmentTransaction).filter(
+            InvestmentTransaction.user_id == current_user.id,
+            InvestmentTransaction.asset_id == asset.id,
+            InvestmentTransaction.trade_date == trade_date,
+            InvestmentTransaction.operation_type == op["operation_type"],
+            InvestmentTransaction.quantity == Decimal(str(op["quantity"])),
+            InvestmentTransaction.total_amount == Decimal(str(op["total_amount"]))
+        ).first()
+
+        if existing:
+            continue
+
         tx = InvestmentTransaction(
             user_id=current_user.id,
             asset_id=asset.id,
@@ -338,7 +401,7 @@ async def upload_sinacor_note(
             total_amount=Decimal(str(op["total_amount"])),
             trade_date=trade_date,
             source="pdf_sinacor",
-            notes=f"Nota B3 #{note_num}" if note_num else "Nota B3 Sinacor"
+            notes=note_tag
         )
         db.add(tx)
         inserted_count += 1
@@ -372,19 +435,19 @@ async def upload_spreadsheet(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Erro ao ler planilha: {str(e)}")
 
-    df.columns = [c.lower().strip() for c in df.columns]
+    df.columns = [str(c).lower().strip() for c in df.columns]
 
-    col_date = next((c for c in df.columns if "data" in c), None)
-    col_ticker = next((c for c in df.columns if "ticker" in c or "ativo" in c or "código" in c or "codigo" in c), None)
-    col_op = next((c for c in df.columns if "oper" in c or "tipo" in c), None)
-    col_qty = next((c for c in df.columns if "quant" in c or "qtd" in c), None)
-    col_price = next((c for c in df.columns if "preço" in c or "preco" in c or "unit" in c or "cotacao" in c), None)
-    col_total = next((c for c in df.columns if "total" in c or "líquido" in c or "liquido" in c or c == "valor"), None)
-    col_costs = next((c for c in df.columns if "taxa" in c or "custo" in c or "emol" in c), None)
+    col_date = next((c for c in df.columns if "data" in c or "date" in c), None)
+    col_ticker = next((c for c in df.columns if "ticker" in c or "ativo" in c or "código" in c or "codigo" in c or "papel" in c), None)
+    col_op = next((c for c in df.columns if "oper" in c or "tipo" in c or "moviment" in c), None)
+    col_qty = next((c for c in df.columns if "quant" in c or "qtd" in c or c == "q" or "cotas" in c), None)
+    col_price = next((c for c in df.columns if "preço" in c or "preco" in c or "unit" in c or "pm" in c), None)
+    col_total = next((c for c in df.columns if "total" in c or "líquido" in c or "liquido" in c or "montante" in c or "aplicado" in c or (c == "valor" and not col_price)), None)
+    col_costs = next((c for c in df.columns if "taxa" in c or "custo" in c or "emol" in c or "corret" in c), None)
     col_class = next((c for c in df.columns if "classe" in c or "classif" in c or "categoria" in c), None)
 
     if not col_ticker or not col_qty:
-        raise HTTPException(status_code=400, detail="A planilha precisa conter ao menos as colunas Ticker e Quantidade.")
+        raise HTTPException(status_code=400, detail="A planilha precisa conter ao menos as colunas de Ticker (Ativo) e Quantidade.")
 
     imported = 0
     for _, row in df.iterrows():
@@ -392,16 +455,9 @@ async def upload_spreadsheet(
         if not ticker_val or ticker_val == "NAN":
             continue
 
-        raw_qty = Decimal(str(row[col_qty]).replace(",", "."))
-        raw_price = Decimal(str(row[col_price]).replace(",", ".")) if col_price and pd.notna(row[col_price]) else Decimal("0.00")
-        raw_costs = Decimal(str(row[col_costs]).replace(",", ".")) if col_costs and pd.notna(row[col_costs]) else Decimal("0.00")
-
-        if col_total and pd.notna(row[col_total]):
-            raw_total = Decimal(str(row[col_total]).replace(",", "."))
-        elif raw_price > 0 and raw_qty > 0:
-            raw_total = (raw_qty * raw_price).quantize(Decimal("0.01"))
-        else:
-            raw_total = raw_price
+        raw_qty = parse_br_decimal(row[col_qty])
+        raw_price = parse_br_decimal(row[col_price]) if col_price else Decimal("0.00")
+        raw_costs = parse_br_decimal(row[col_costs]) if col_costs else Decimal("0.00")
 
         op_type = "buy"
         if col_op and pd.notna(row[col_op]):
@@ -415,6 +471,19 @@ async def upload_spreadsheet(
             elif "rend" in op_str:
                 op_type = "rendimento"
 
+        if col_total and pd.notna(row[col_total]):
+            raw_total = parse_br_decimal(row[col_total])
+        elif op_type in ["dividend", "jcp", "rendimento"]:
+            if raw_qty <= 1 or raw_price > Decimal("10.00"):
+                raw_total = raw_price
+            else:
+                raw_total = (raw_qty * raw_price).quantize(Decimal("0.01"))
+        else:
+            if raw_price > 0 and raw_qty > 0:
+                raw_total = (raw_qty * raw_price + raw_costs).quantize(Decimal("0.01"))
+            else:
+                raw_total = raw_price
+
         row_date = datetime.utcnow()
         if col_date and pd.notna(row[col_date]):
             try:
@@ -425,6 +494,19 @@ async def upload_spreadsheet(
         custom_class = str(row[col_class]).strip() if col_class and pd.notna(row[col_class]) else None
         asset = get_or_create_asset(ticker_val, None, custom_class, db)
         
+        # Deduplicação estrita
+        existing = db.query(InvestmentTransaction).filter(
+            InvestmentTransaction.user_id == current_user.id,
+            InvestmentTransaction.asset_id == asset.id,
+            InvestmentTransaction.trade_date == row_date,
+            InvestmentTransaction.operation_type == op_type,
+            InvestmentTransaction.quantity == raw_qty,
+            InvestmentTransaction.total_amount == raw_total
+        ).first()
+
+        if existing:
+            continue
+
         tx = InvestmentTransaction(
             user_id=current_user.id,
             asset_id=asset.id,
@@ -487,9 +569,10 @@ def get_investment_summary(
     current_user: User = Depends(get_current_user)
 ):
     portfolio = get_portfolio(db, current_user)
+    # Total da custódia ativo (apenas posições que o usuário ainda detém)
     total_invested = sum((p.total_invested for p in portfolio if p.quantity > 0), Decimal("0.00"))
 
-    # Soma de proventos de renda variável de todo o histórico
+    # Total de proventos de renda variável de todo o histórico
     all_txs = db.query(InvestmentTransaction, Asset)\
         .join(Asset, InvestmentTransaction.asset_id == Asset.id)\
         .filter(
@@ -541,6 +624,61 @@ def get_investment_summary(
         total_dividends_received=hist_dividends,
         positions_count=len([p for p in portfolio if p.quantity > 0])
     )
+
+@router.post("/recalculate")
+def recalculate_investments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    # 1. Deduplicação no banco
+    db.execute(text("""
+        DELETE FROM investment_transactions a USING investment_transactions b
+        WHERE a.id > b.id
+          AND a.user_id = b.user_id
+          AND a.asset_id = b.asset_id
+          AND a.operation_type = b.operation_type
+          AND a.total_amount = b.total_amount
+          AND a.trade_date = b.trade_date
+          AND a.user_id = :uid;
+    """), {"uid": current_user.id})
+
+    # 2. Cura proventos multiplicados
+    db.execute(text("""
+        UPDATE investment_transactions
+        SET total_amount = unit_price,
+            unit_price = ROUND(unit_price / NULLIF(quantity, 0), 4)
+        WHERE operation_type IN ('dividend', 'jcp', 'rendimento')
+          AND quantity > 1
+          AND unit_price >= 5.00
+          AND total_amount >= (quantity * unit_price - 0.05)
+          AND user_id = :uid;
+    """), {"uid": current_user.id})
+
+    # 3. Remove snapshots indevidos de dividendos
+    db.execute(text("""
+        DELETE FROM investment_transactions
+        WHERE operation_type IN ('dividend', 'jcp', 'rendimento')
+          AND notes ILIKE '%Posição Open Finance%'
+          AND user_id = :uid;
+    """), {"uid": current_user.id})
+
+    db.commit()
+    return get_investment_summary(db, current_user)
+
+@router.post("/reset-data")
+def reset_investment_data(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    deleted_count = db.query(InvestmentTransaction).filter(
+        InvestmentTransaction.user_id == current_user.id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"{deleted_count} transações de investimentos foram removidas. Sua carteira foi reiniciada do zero.",
+        "deleted_count": deleted_count
+    }
 
 PERIOD_LABELS = {
     "current_month": "Mês atual",

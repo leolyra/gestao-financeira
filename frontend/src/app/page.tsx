@@ -332,6 +332,8 @@ export default function Home() {
   const [showManualInvModal, setShowManualInvModal] = useState(false);
   const [invUploadMsg, setInvUploadMsg] = useState("");
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [isUploadingSpreadsheet, setIsUploadingSpreadsheet] = useState(false);
+  const [isRecalculating, setIsRecalculating] = useState(false);
 
   // Form Operação Manual Investimento
   const [invTicker, setInvTicker] = useState("");
@@ -659,6 +661,77 @@ export default function Home() {
       }
     } catch (err: any) {
       alert("Erro ao salvar operação: " + err.message);
+    }
+  }
+
+  async function handleUploadSpreadsheet(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingSpreadsheet(true);
+    setInvUploadMsg("Lendo e processando planilha de investimentos...");
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const token = getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "https://api-financeira.leo.lyra.nom.br"}/api/v1/investments/upload-spreadsheet`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${token}` },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setInvUploadMsg(`Erro: ${data.detail || "Falha ao processar planilha"}`);
+        return;
+      }
+      setInvUploadMsg(`Sucesso! ${data.imported_rows} registros de investimentos importados da planilha.`);
+      loadAllData();
+    } catch (err: any) {
+      setInvUploadMsg("Erro no envio: " + err.message);
+    } finally {
+      setIsUploadingSpreadsheet(false);
+    }
+  }
+
+  async function handleRecalculateInvestments() {
+    setIsRecalculating(true);
+    setInvUploadMsg("Recalculando posições de custódia e proventos do zero...");
+    try {
+      const res = await fetchWithAuth("/investments/recalculate", {
+        method: "POST"
+      });
+      if (res.ok) {
+        setInvUploadMsg("Recálculo e saneamento da carteira concluídos com sucesso!");
+        loadAllData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Erro ao recalcular: ${err.detail || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Falha de conexão: ${err.message}`);
+    } finally {
+      setIsRecalculating(false);
+    }
+  }
+
+  async function handleResetInvestmentData() {
+    if (!confirm("ATENÇÃO: Deseja realmente zerar todos os lançamentos da carteira de investimentos para reiniciar do zero?\n\nEssa ação apagará os registros de investimentos atuais para que você possa importar sua planilha ou notas limpas.")) {
+      return;
+    }
+    try {
+      const res = await fetchWithAuth("/investments/reset-data", {
+        method: "POST"
+      });
+      if (res.ok) {
+        alert("Carteira de investimentos zerada com sucesso! Você pode agora importar seus arquivos do zero.");
+        loadAllData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Erro ao zerar: ${err.detail || res.statusText}`);
+      }
+    } catch (err: any) {
+      alert(`Falha de conexão: ${err.message}`);
     }
   }
 
@@ -2727,19 +2800,46 @@ export default function Home() {
 
             <div className="p-5 bg-slate-900 border border-slate-800 rounded-xl shadow-sm">
               <div className="flex justify-between items-center text-slate-400">
-                <span className="text-xs font-medium uppercase tracking-wider">Ações de Importação</span>
+                <span className="text-xs font-medium uppercase tracking-wider">Ações & Importação</span>
                 <UploadCloud className="w-4 h-4 text-blue-400" />
               </div>
               <div className="mt-2 flex flex-col gap-1.5">
-                <label className="cursor-pointer text-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition">
-                  {isUploadingPdf ? "Lendo Nota..." : "Importar Nota PDF (Sinacor)"}
-                  <input type="file" accept=".pdf" onChange={handleUploadSinacor} className="hidden" />
-                </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <label className="cursor-pointer text-center px-2 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition flex items-center justify-center gap-1" title="Importar notas de corretagem da B3 em PDF">
+                    <span>{isUploadingPdf ? "Lendo..." : "Nota PDF B3"}</span>
+                    <input type="file" accept=".pdf" onChange={handleUploadSinacor} className="hidden" />
+                  </label>
+                  <label className="cursor-pointer text-center px-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-medium transition flex items-center justify-center gap-1" title="Importar planilha de custódia ou operações (.xlsx, .csv)">
+                    <span>{isUploadingSpreadsheet ? "Lendo..." : "Planilha Excel"}</span>
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={handleUploadSpreadsheet} className="hidden" />
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleRecalculateInvestments}
+                    disabled={isRecalculating}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-indigo-300 hover:text-white border border-slate-700 rounded-lg text-[11px] font-medium transition flex items-center justify-center gap-1 disabled:opacity-50"
+                    title="Recalcular do zero todas as posições de custódia e proventos"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isRecalculating ? "animate-spin" : ""}`} />
+                    <span>Recalcular</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowMigrateModal(!showMigrateModal)}
+                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-[11px] font-medium transition"
+                  >
+                    Migrar Ticker
+                  </button>
+                </div>
                 <button
-                  onClick={() => setShowMigrateModal(!showMigrateModal)}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-lg text-xs font-medium transition"
+                  type="button"
+                  onClick={handleResetInvestmentData}
+                  className="w-full px-2 py-1 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 hover:text-rose-200 border border-rose-800/40 rounded-lg text-[10px] font-medium transition"
+                  title="Zerar todos os lançamentos da carteira para reiniciar do zero"
                 >
-                  Migrar Ticker (De/Para)
+                  Zerar Carteira (Reiniciar do Zero)
                 </button>
               </div>
             </div>

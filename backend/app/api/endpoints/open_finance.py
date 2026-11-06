@@ -69,7 +69,7 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
         else:
             tx_date = local_now_naive()
     except Exception:
-        tx_date = datetime.utcnow()
+        tx_date = local_now_naive()
 
     existing = db.query(Transaction).join(Account).filter(Transaction.pluggy_transaction_id == tx_id,
         Transaction.account_id == account_id, Account.user_id == user_id).first()
@@ -289,11 +289,11 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                         elif itx_amt == 0 and itx_val > 0:
                             itx_amt = itx_val
 
-                        itx_d = datetime.utcnow()
+                        itx_d = local_now_naive()
                         itx_raw_d = itx.get("tradeDate") or itx.get("date")
                         if itx_raw_d:
                             try:
-                                itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00"))
+                                itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00"))))
                             except Exception:
                                 pass
 
@@ -467,7 +467,7 @@ async def get_open_finance_diagnostics(
     """
     report = {
         "user_id": current_user.id,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": local_now_naive().isoformat(),
         "total_items_found": 0,
         "items": [],
         "database_summary": {

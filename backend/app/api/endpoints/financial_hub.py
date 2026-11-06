@@ -146,7 +146,7 @@ def delete_goal(goal_id:int,db:Session=Depends(get_db),user:User=Depends(get_cur
 
 @router.get("/cash-flow-forecast")
 def cash_flow_forecast(months:int=6,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    months=max(1,min(months,24));now=datetime.utcnow();since=now-timedelta(days=180)
+    months=max(1,min(months,24));now=local_now_naive();since=now-timedelta(days=180)
     txs=db.query(Transaction).join(Account).filter(Account.user_id==user.id,Transaction.is_accounted==True,Transaction.date>=since).all()
     totals={}
     for i in range(6):
@@ -170,7 +170,7 @@ def cash_flow_forecast(months:int=6,db:Session=Depends(get_db),user:User=Depends
 
 @router.get("/calendar")
 def financial_calendar(days:int=90,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    until=datetime.utcnow()+timedelta(days=max(1,min(days,365)))
+    until=local_now_naive()+timedelta(days=max(1,min(days,365)))
     bills=db.query(CreditCardBill).filter(CreditCardBill.user_id==user.id,CreditCardBill.due_date!=None,
         CreditCardBill.due_date<=until,CreditCardBill.status.notin_(["PAID","CLOSED_PAID"])).all()
     return [{"type":"credit_card_bill","date":b.due_date,"title":"Fatura do cartão",
@@ -178,7 +178,7 @@ def financial_calendar(days:int=90,db:Session=Depends(get_db),user:User=Depends(
 
 @router.get("/insights")
 def financial_insights(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    since=datetime.utcnow()-timedelta(days=90)
+    since=local_now_naive()-timedelta(days=90)
     txs=db.query(Transaction).join(Account).filter(Account.user_id==user.id,Transaction.is_accounted==True,Transaction.date>=since).all()
     groups={}
     for tx in txs:
@@ -196,7 +196,7 @@ def financial_insights(db:Session=Depends(get_db),user:User=Depends(get_current_
     for tx in txs:
         if money(tx.amount)<0:
             key=tx.date.strftime("%Y-%m");monthly[key]=monthly.get(key,ZERO)+abs(money(tx.amount))
-    current=datetime.utcnow().strftime("%Y-%m");current_expense=monthly.get(current,ZERO)
+    current=local_now_naive().strftime("%Y-%m");current_expense=monthly.get(current,ZERO)
     previous=[v for k,v in monthly.items() if k!=current]
     avg=sum(previous,ZERO)/max(1,len(previous))
     insights=[]
@@ -210,7 +210,7 @@ def financial_insights(db:Session=Depends(get_db),user:User=Depends(get_current_
 @router.get("/fire-simulator")
 def fire_simulator(monthly_contribution:Decimal=Decimal("0"),annual_return_pct:Decimal=Decimal("6"),
     withdrawal_rate_pct:Decimal=Decimal("4"),db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    since=datetime.utcnow()-timedelta(days=180)
+    since=local_now_naive()-timedelta(days=180)
     txs=db.query(Transaction).join(Account).filter(Account.user_id==user.id,Transaction.is_accounted==True,Transaction.date>=since).all()
     expenses=sum((abs(money(t.amount)) for t in txs if money(t.amount)<0),ZERO)/6
     income=sum((money(t.amount) for t in txs if money(t.amount)>0),ZERO)/6

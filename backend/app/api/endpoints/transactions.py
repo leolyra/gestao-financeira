@@ -269,9 +269,9 @@ def get_summary(
         if days >= 3650:
             p_start = None
         else:
-            p_start = datetime.utcnow() - timedelta(days=days)
+            p_start = local_now_naive() - timedelta(days=days)
     else:
-        p_start = datetime.utcnow() - timedelta(days=90)
+        p_start = local_now_naive() - timedelta(days=90)
 
     tx_query = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
         .filter(Account.user_id == current_user.id, Transaction.is_accounted == True)
@@ -426,7 +426,7 @@ def get_historical_evolution(
     if months >= 120:
         since_date = datetime(2000, 1, 1)
     else:
-        since_date = datetime.utcnow() - timedelta(days=months * 31)
+        since_date = local_now_naive() - timedelta(days=months * 31)
 
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
         .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True)\
@@ -629,7 +629,7 @@ def export_transactions_xlsx(
     wb.save(buf)
     buf.seek(0)
 
-    filename = f"extrato_lancamentos_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"extrato_lancamentos_{local_now_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

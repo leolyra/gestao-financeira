@@ -528,7 +528,7 @@ async def upload_spreadsheet(
         ).delete(synchronize_session=False)
 
         imported = 0
-        now = datetime.utcnow()
+        now = local_now_naive()
         for _, row in df.iterrows():
             ticker_val = str(row[col_ticker]).strip().upper()
             if not ticker_val or ticker_val == "NAN":
@@ -613,12 +613,12 @@ async def upload_spreadsheet(
             else:
                 raw_total = raw_price
 
-        row_date = datetime.utcnow()
+        row_date = local_now_naive()
         if col_date and pd.notna(row[col_date]):
             try:
                 row_date = pd.to_datetime(row[col_date], dayfirst=True).to_pydatetime()
             except Exception:
-                row_date = datetime.utcnow()
+                row_date = local_now_naive()
 
         custom_class = str(row[col_class]).strip() if col_class and pd.notna(row[col_class]) else None
         asset_cls = classify_asset_smart(ticker_val, custom_class)
@@ -720,7 +720,7 @@ def get_investment_summary(
         Decimal("0.00")
     )
 
-    now = datetime.utcnow()
+    now = local_now_naive()
     month_start = datetime(now.year, now.month, 1)
     ledger = db.query(InvestmentTransaction).filter(
         InvestmentTransaction.user_id == current_user.id,

@@ -180,6 +180,13 @@ def financial_insights(db:Session=Depends(get_db),user:User=Depends(get_current_
         key=(tx.account_id,(tx.description or "").strip().lower(),abs(money(tx.amount)))
         groups[key]=groups.get(key,0)+1
     possible=[{"account_id":k[0],"description":k[1],"amount":k[2],"occurrences":v} for k,v in groups.items() if v>1]
+    recurring={}
+    for tx in txs:
+        if money(tx.amount)<0:
+            key=(tx.account_id,(tx.description or "").strip().lower(),abs(money(tx.amount)))
+            recurring.setdefault(key,set()).add(tx.date.strftime("%Y-%m"))
+    subscriptions=[{"account_id":k[0],"description":k[1],"monthly_amount":k[2],"months_detected":len(v)}
+        for k,v in recurring.items() if len(v)>=2]
     monthly={}
     for tx in txs:
         if money(tx.amount)<0:
@@ -191,7 +198,9 @@ def financial_insights(db:Session=Depends(get_db),user:User=Depends(get_current_
     if avg>0 and current_expense>avg*Decimal("1.25"):
         insights.append({"type":"spending_spike","severity":"warning","message":"As despesas do mês atual estão mais de 25% acima da média dos meses anteriores."})
     if possible:insights.append({"type":"possible_duplicates","severity":"info","count":len(possible),"items":possible[:20]})
-    return {"period_days":90,"insights":insights,"note":"Alertas heurísticos; confirme lançamentos repetidos antes de excluir."}
+    if subscriptions:insights.append({"type":"recurring_charges","severity":"info","count":len(subscriptions),"items":subscriptions[:20],
+        "message":"Cobranças com descrição e valor semelhantes em meses diferentes; revise se são assinaturas ainda necessárias."})
+    return {"period_days":90,"insights":insights,"note":"Alertas heurísticos; confirme cobranças recorrentes e possíveis duplicidades antes de agir."}
 
 @router.get("/fire-simulator")
 def fire_simulator(monthly_contribution:Decimal=Decimal("0"),annual_return_pct:Decimal=Decimal("6"),

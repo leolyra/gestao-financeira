@@ -24,6 +24,7 @@ from app.schemas.investment import (
 from app.services.sinacor_parser import parse_sinacor_pdf, guess_asset_type
 from app.services.categorizer import resolve_date_range
 from app.api.deps import get_current_user
+from app.services.time_utils import local_now_naive
 from app.services.portfolio_math import calculate_realized_gain
 
 router = APIRouter(prefix="/investments", tags=["investments"])
@@ -153,7 +154,7 @@ def load_official_custody(
     ).delete(synchronize_session=False)
 
     count = 0
-    now = datetime.utcnow()
+    now = local_now_naive()
     for item in OFFICIAL_CUSTODY_DATA:
         ticker = item["ticker"]
         name = item["name"]

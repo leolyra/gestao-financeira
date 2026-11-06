@@ -53,11 +53,12 @@ def detect_cost_type(description: str) -> str:
 
 from datetime import datetime, timedelta
 from typing import Tuple
+from app.services.time_utils import local_now_naive
 
 def resolve_date_range(period: Optional[str]) -> Tuple[Optional[datetime], Optional[datetime]]:
     if not period:
         return None, None
-    now = datetime.utcnow()
+    now = local_now_naive()
     p = period.lower().strip()
 
     if p in ["current_month", "mes_atual", "mês atual"]:

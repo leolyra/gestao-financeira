@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.deps import get_current_user
+from app.services.time_utils import local_now_naive
 from app.models.entities import Account, Asset, AssetQuote, CreditCardBill, FinancialGoal, Transaction, User
 from app.services.pluggy_service import pluggy_service
 from app.api.endpoints.investments import get_portfolio
@@ -60,7 +61,7 @@ def net_worth(db: Session = Depends(get_db), user: User = Depends(get_current_us
     liabilities=max(card_debt,bills_total)
     return {"cash_and_bank_accounts":cash,"investment_market_value":market,"investment_cost_basis":invested,
         "investment_unrealized_gain":unrealized,"credit_card_liabilities":liabilities,"open_bills":bills_total,
-        "net_worth":cash+market-liabilities,"quote_missing":missing,"updated_at":datetime.utcnow().isoformat()}
+        "net_worth":cash+market-liabilities,"quote_missing":missing,"updated_at":local_now_naive().isoformat()}
 
 @router.get("/investment-dashboard")
 def investment_dashboard(db: Session = Depends(get_db), user: User = Depends(get_current_user)):

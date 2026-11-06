@@ -22,11 +22,12 @@ from app.schemas.transaction import (
 )
 from app.services.categorizer import auto_categorize, resolve_date_range
 from app.api.deps import get_current_user
+from app.services.time_utils import local_now_naive
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 def resolve_date_range(period: str) -> tuple[Optional[datetime], Optional[datetime]]:
-    now = datetime.utcnow()
+    now = local_now_naive()
     p = (period or "").lower().strip()
     if p == "current_month":
         start = datetime(now.year, now.month, 1, 0, 0, 0)

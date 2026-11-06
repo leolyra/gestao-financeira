@@ -9,6 +9,7 @@ import re
 from app.core.config import settings
 from app.core.database import get_db
 from app.models.entities import Account, Transaction, User, Asset, InvestmentTransaction, PluggyConnection, AssetQuote
+from app.services.time_utils import local_now_naive, to_local_naive
 from app.services.pluggy_service import pluggy_service
 from app.services.categorizer import auto_categorize, detect_cost_type
 from app.api.deps import get_current_user
@@ -64,9 +65,9 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
         if raw_date:
             clean_date = raw_date.replace("Z", "+00:00")
             dt = datetime.fromisoformat(clean_date)
-            tx_date = dt.replace(tzinfo=None)
+            tx_date = to_local_naive(dt)
         else:
-            tx_date = datetime.utcnow()
+            tx_date = local_now_naive()
     except Exception:
         tx_date = datetime.utcnow()
 
@@ -292,7 +293,7 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                         itx_raw_d = itx.get("tradeDate") or itx.get("date")
                         if itx_raw_d:
                             try:
-                                itx_d = datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00")).replace(tzinfo=None)
+                                itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00"))
                             except Exception:
                                 pass
 

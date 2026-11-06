@@ -232,11 +232,21 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
             asset = get_or_create_asset(code, name, asset_type, db)
 
             qty = Decimal(str(inv.get("quantity") or 0))
-            market_value = Decimal(str(inv.get("amount") or inv.get("balance") or inv.get("value") or 0))
-            currency = str(inv.get("currency") or "BRL").upper()
-            if qty > 0 and market_value > 0 and currency == "BRL":
-                db.add(AssetQuote(user_id=current_user_id, asset_id=asset.id, price=(market_value / qty).quantize(Decimal("0.0001")), quantity=qty, currency=currency, source="pluggy"))
-                synced_invs += 1
+            currency = str(inv.get("currencyCode") or inv.get("currency") or "BRL").upper()
+            gross_or_net_amount = inv.get("amount") if inv.get("amount") is not None else inv.get("balance")
+            if qty > 0 and currency == "BRL":
+                if gross_or_net_amount is not None:
+                    unit_quote = Decimal(str(gross_or_net_amount)) / qty
+                elif inv.get("value") is not None:
+                    # Pluggy value is the current unit/quota price, not the position total.
+                    unit_quote = Decimal(str(inv.get("value")))
+                else:
+                    unit_quote = Decimal("0")
+                if unit_quote > 0:
+                    db.add(AssetQuote(user_id=current_user_id, asset_id=asset.id,
+                        price=unit_quote.quantize(Decimal("0.0001")), quantity=qty,
+                        currency=currency, source="pluggy"))
+                    synced_invs += 1
 
             # Transações históricas do investimento: Compras, Vendas, Dividendos, JCP, Rendimentos
             inv_id = inv.get("id")

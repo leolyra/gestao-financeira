@@ -293,7 +293,7 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                         itx_raw_d = itx.get("tradeDate") or itx.get("date")
                         if itx_raw_d:
                             try:
-                                itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00"))))
+                                itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00")))
                             except Exception:
                                 pass
 

@@ -72,8 +72,9 @@ class PluggyService:
             
             return res
 
-    async def create_connect_token(self) -> str:
-        res = await self._request("POST", "/connect_token")
+    async def create_connect_token(self, client_user_id: Optional[str] = None) -> str:
+        payload = {"options": {"clientUserId": str(client_user_id), "avoidDuplicates": True}} if client_user_id else {}
+        res = await self._request("POST", "/connect_token", json_data=payload)
         if res.status_code != 200:
             raise Exception(f"Erro ao gerar connect token: {res.text}")
         return res.json().get("accessToken")
@@ -119,125 +120,51 @@ class PluggyService:
 
     async def get_bills(self, account_id: str) -> List[Dict[str, Any]]:
         try:
-            res = await self._request("GET", "/bills", params={"accountId": account_id})
-            if res.status_code == 200:
-                return res.json().get("results", [])
-            else:
-                print(f"[PLUGGY] /bills retornou status {res.status_code}: {res.text}")
-        except Exception as e:
-            print(f"[PLUGGY] Aviso ao buscar faturas em /bills: {e}")
-        return []
-
-    async def get_transactions(self, account_id: str, bill_id: Optional[str] = None, from_date: Optional[str] = None) -> List[Dict[str, Any]]:
-        default_from = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
-        f_date = from_date or default_from
-
-        # 1. Se tem bill_id (Fatura de cartão de crédito)
-        if bill_id:
-            try:
-                res = await self._request("GET", "/v2/transactions", params={"accountId": account_id, "billId": bill_id})
-                if res.status_code == 200:
-                    r = res.json().get("results", [])
-                    if r:
-                        return r
-            except Exception as e:
-                print(f"[PLUGGY] Erro /v2/transactions com billId: {e}")
-
-            try:
-                res = await self._request("GET", "/transactions", params={"accountId": account_id, "billId": bill_id})
-                if res.status_code == 200:
-                    r = res.json().get("results", [])
-                    if r:
-                        return r
-            except Exception as e:
-                print(f"[PLUGGY] Erro /transactions com billId: {e}")
-
-            try:
-                res = await self._request("GET", "/v2/transactions", params={"billId": bill_id})
-                if res.status_code == 200:
-                    r = res.json().get("results", [])
-                    if r:
-                        return r
-                res_v1 = await self._request("GET", "/transactions", params={"billId": bill_id})
-                if res_v1.status_code == 200:
-                    r = res_v1.json().get("results", [])
-                    if r:
-                        return r
-            except Exception:
-                pass
-
+            return await self._get_all_pages("/bills", {"accountId": account_id})
+        except Exception as exc:
+            print(f"[PLUGGY] Falha ao paginar faturas: {exc}")
             return []
 
-        # 2. Transações de conta corrente / geral
-        try:
-            res_v2 = await self._request("GET", "/v2/transactions", params={"accountId": account_id, "from": f_date})
-            if res_v2.status_code == 200:
-                results = res_v2.json().get("results", [])
-                if results:
-                    return results
-            else:
-                print(f"[PLUGGY] /v2/transactions com from status {res_v2.status_code}: {res_v2.text}")
-        except Exception as e:
-            print(f"[PLUGGY] Aviso ao buscar em /v2/transactions com from: {e}")
+    async def _get_all_pages(self, path: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        collected, seen = [], set()
+        for page in range(1, 101):
+            response = await self._request("GET", path, params={**params, "page": page, "pageSize": 500})
+            if response.status_code != 200:
+                if page == 1: raise Exception(f"Pluggy {path} retornou {response.status_code}: {response.text}")
+                break
+            payload=response.json(); rows=payload.get("results",[])
+            if not rows: break
+            for row in rows:
+                key=str(row.get("id")) if row.get("id") is not None else repr(row)
+                if key not in seen: seen.add(key); collected.append(row)
+            pagination=payload.get("pagination") or {}
+            total_pages=pagination.get("totalPages") or pagination.get("total_pages")
+            if total_pages and page>=int(total_pages): break
+            if len(rows)<500: break
+        return collected
 
-        try:
-            res_v1 = await self._request("GET", "/transactions", params={"accountId": account_id, "from": f_date, "pageSize": 500})
-            if res_v1.status_code == 200:
-                results = res_v1.json().get("results", [])
-                if results:
-                    return results
-            else:
-                print(f"[PLUGGY] /transactions com from status {res_v1.status_code}: {res_v1.text}")
-        except Exception as e:
-            print(f"[PLUGGY] Aviso ao buscar em /transactions com from: {e}")
-
-        try:
-            res_simple = await self._request("GET", "/v2/transactions", params={"accountId": account_id})
-            if res_simple.status_code == 200:
-                results = res_simple.json().get("results", [])
-                if results:
-                    return results
-        except Exception:
-            pass
-
-        try:
-            res_v1_simple = await self._request("GET", "/transactions", params={"accountId": account_id})
-            if res_v1_simple.status_code == 200:
-                return res_v1_simple.json().get("results", [])
-        except Exception:
-            pass
-
+    async def get_transactions(self, account_id: str, bill_id: Optional[str] = None, from_date: Optional[str] = None) -> List[Dict[str, Any]]:
+        params={"accountId":account_id}
+        if bill_id: params["billId"]=bill_id
+        else: params["from"]=from_date or "2000-01-01"
+        for path in ("/v2/transactions","/transactions"):
+            try:
+                rows=await self._get_all_pages(path,params)
+                if rows:return rows
+            except Exception as exc:
+                print(f"[PLUGGY] Falha paginando {path}: {exc}")
         return []
 
     async def get_investments(self, item_id: str) -> List[Dict[str, Any]]:
-        try:
-            res = await self._request("GET", "/investments", params={"itemId": item_id})
-            if res.status_code == 200:
-                results = res.json().get("results", [])
-                return results
-            else:
-                print(f"[PLUGGY] /investments status {res.status_code}: {res.text}")
-        except Exception as e:
-            print(f"[PLUGGY] Aviso ao buscar investimentos em /investments: {e}")
-
-        try:
-            res_p = await self._request("GET", "/investments", params={"itemId": item_id, "pageSize": 100})
-            if res_p.status_code == 200:
-                return res_p.json().get("results", [])
-        except Exception:
-            pass
-
-        return []
+        try: return await self._get_all_pages("/investments", {"itemId": item_id})
+        except Exception as exc:
+            print(f"[PLUGGY] Falha ao paginar investimentos: {exc}")
+            return []
 
     async def get_investment_transactions(self, investment_id: str) -> List[Dict[str, Any]]:
-        try:
-            res = await self._request("GET", f"/investments/{investment_id}/transactions")
-            if res.status_code == 200:
-                return res.json().get("results", [])
-            else:
-                print(f"[PLUGGY] /investments/{investment_id}/transactions status {res.status_code}: {res.text}")
-        except Exception as e:
-            print(f"[PLUGGY] Aviso ao buscar transacoes do investimento {investment_id}: {e}")
-        return []
+        try: return await self._get_all_pages(f"/investments/{investment_id}/transactions", {})
+        except Exception as exc:
+            print(f"[PLUGGY] Falha ao paginar operações do investimento: {exc}")
+            return []
 
 pluggy_service = PluggyService()

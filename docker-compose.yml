@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
       POSTGRES_DB: financas_db
     ports:
       - "5432:5432"
@@ -20,8 +20,11 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://postgres:postgrespassword@postgres:5432/financas_db
-      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgrespassword}@postgres:5432/financas_db
+      SECRET_KEY: ${SECRET_KEY:?Configure SECRET_KEY com pelo menos 32 caracteres}
+      PLUGGY_CLIENT_ID: ${PLUGGY_CLIENT_ID:-}
+      PLUGGY_CLIENT_SECRET: ${PLUGGY_CLIENT_SECRET:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
     depends_on:
       - postgres
 
@@ -32,7 +35,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
       - api
 

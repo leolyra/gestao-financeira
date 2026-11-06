@@ -105,6 +105,8 @@ def create_transaction(
         raise HTTPException(status_code=404, detail="Conta não encontrada.")
 
     category_id = tx_in.category_id
+    if category_id and not db.query(Category).filter(Category.id == category_id, (Category.user_id == current_user.id) | (Category.user_id.is_(None))).first():
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
     if not category_id:
         category_id = auto_categorize(tx_in.description, current_user.id, db)
 
@@ -153,6 +155,8 @@ def update_transaction_category(
     if not tx:
         raise HTTPException(status_code=404, detail="Transação não encontrada.")
 
+    if cat_update.category_id is not None and not db.query(Category).filter(Category.id == cat_update.category_id, (Category.user_id == current_user.id) | (Category.user_id.is_(None))).first():
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
     tx.category_id = cat_update.category_id
     db.commit()
     db.refresh(tx)
@@ -233,6 +237,11 @@ def update_transaction_accounted(
     if not tx:
         raise HTTPException(status_code=404, detail="Transação não encontrada.")
 
+    if tx.is_manual and tx.is_accounted != payload.is_accounted:
+        account = db.query(Account).filter(Account.id == tx.account_id, Account.user_id == current_user.id).first()
+        if account:
+            delta = Decimal(str(tx.amount)) if payload.is_accounted else -Decimal(str(tx.amount))
+            account.balance = Decimal(str(account.balance or 0)) + delta
     tx.is_accounted = payload.is_accounted
     db.commit()
     db.refresh(tx)

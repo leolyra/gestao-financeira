@@ -44,12 +44,14 @@ def net_worth(db: Session = Depends(get_db), user: User = Depends(get_current_us
     bills_total=sum((max(ZERO,money(b.amount)-money(b.paid_amount)) for b in bills),ZERO)
     positions={p.asset_id:p for p in get_portfolio(db,user)}
     quotes=latest_quotes(db,user.id)
-    market=ZERO; missing=[]
+    market=ZERO; unrealized=ZERO; missing=[]
     for aid,p in positions.items():
         quote=quotes.get(aid)
         if quote:
             qty=money(quote.quantity) if quote.quantity is not None else money(p.quantity)
-            market+=qty*money(quote.price)
+            market_value=qty*money(quote.price)
+            market+=market_value
+            unrealized+=market_value-money(p.total_invested)
         else: missing.append(p.ticker)
     for aid,q in quotes.items():
         if aid not in positions and q.quantity is not None:
@@ -57,7 +59,7 @@ def net_worth(db: Session = Depends(get_db), user: User = Depends(get_current_us
     invested=sum((money(p.total_invested) for p in positions.values()),ZERO)
     liabilities=max(card_debt,bills_total)
     return {"cash_and_bank_accounts":cash,"investment_market_value":market,"investment_cost_basis":invested,
-        "investment_unrealized_gain":market-invested,"credit_card_liabilities":liabilities,"open_bills":bills_total,
+        "investment_unrealized_gain":unrealized,"credit_card_liabilities":liabilities,"open_bills":bills_total,
         "net_worth":cash+market-liabilities,"quote_missing":missing,"updated_at":datetime.utcnow().isoformat()}
 
 @router.get("/investment-dashboard")
@@ -65,7 +67,7 @@ def investment_dashboard(db: Session = Depends(get_db), user: User = Depends(get
     positions={p.asset_id:p for p in get_portfolio(db,user)}
     quotes=latest_quotes(db,user.id)
     ids=set(positions)|set(quotes)
-    rows=[]; by_class={}; total_cost=ZERO; total_market=ZERO
+    rows=[]; by_class={}; total_cost=ZERO; total_market=ZERO; total_unrealized=ZERO
     for aid in ids:
         p=positions.get(aid); quote=quotes.get(aid)
         asset=db.query(Asset).filter(Asset.id==aid).first()
@@ -76,6 +78,8 @@ def investment_dashboard(db: Session = Depends(get_db), user: User = Depends(get
         cls=p.asset_type if p else (asset.asset_type if asset else "Outros")
         ticker=p.ticker if p else (asset.ticker_current if asset else str(aid))
         total_cost+=cost; total_market+=market
+        if quote and p:
+            total_unrealized += market-cost
         by_class[cls]=by_class.get(cls,ZERO)+market
         rows.append({"asset_id":aid,"ticker":ticker,"name":p.name if p else (asset.name if asset else ticker),
             "asset_type":cls,"quantity":qty,"average_price":p.average_price if p else ZERO,
@@ -83,7 +87,7 @@ def investment_dashboard(db: Session = Depends(get_db), user: User = Depends(get
             "unrealized_gain":market-cost if quote and p else None,
             "quote_date":quote.quoted_at.isoformat() if quote else None})
     return {"positions":rows,"total_cost_basis":total_cost,"total_market_value":total_market,
-        "unrealized_gain":total_market-total_cost,"allocation_by_class":by_class}
+        "unrealized_gain":total_unrealized,"allocation_by_class":by_class}
 
 @router.post("/quotes")
 def add_quote(payload: QuoteInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)):

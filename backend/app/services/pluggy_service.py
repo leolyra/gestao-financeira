@@ -134,13 +134,14 @@ class PluggyService:
                 break
             payload=response.json(); rows=payload.get("results",[])
             if not rows: break
+            previous_count=len(collected)
             for row in rows:
                 key=str(row.get("id")) if row.get("id") is not None else repr(row)
                 if key not in seen: seen.add(key); collected.append(row)
             pagination=payload.get("pagination") or {}
             total_pages=pagination.get("totalPages") or pagination.get("total_pages")
             if total_pages and page>=int(total_pages): break
-            if len(rows)<500: break
+            if len(collected)==previous_count: break
         return collected
 
     async def get_transactions(self, account_id: str, bill_id: Optional[str] = None, from_date: Optional[str] = None) -> List[Dict[str, Any]]:

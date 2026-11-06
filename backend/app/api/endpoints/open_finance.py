@@ -233,7 +233,7 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
 
             qty = Decimal(str(inv.get("quantity") or 0))
             currency = str(inv.get("currencyCode") or inv.get("currency") or "BRL").upper()
-            gross_or_net_amount = inv.get("amount") if inv.get("amount") is not None else inv.get("balance")
+            gross_or_net_amount = inv.get("balance") if inv.get("balance") is not None else inv.get("amount")
             if qty > 0 and currency == "BRL":
                 if gross_or_net_amount is not None:
                     unit_quote = Decimal(str(gross_or_net_amount)) / qty

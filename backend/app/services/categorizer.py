@@ -1,7 +1,7 @@
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from app.models.entities import Category, Transaction
+from app.models.entities import Account, Category, Transaction
 
 KEYWORD_RULES = [
     (["mercado", "supermercado", "pao de acucar", "assai", "atacadão", "carrefour", "hortifruti", "padaria", "restaurante", "ifood", "burger", "pizza"], "Alimentação / Supermercado"),
@@ -18,7 +18,8 @@ def auto_categorize(description: str, user_id: int, db: Session) -> Optional[int
 
     past_tx = db.query(Transaction).filter(
         Transaction.description.ilike(f"%{description[:15]}%"),
-        Transaction.category_id.isnot(None)
+        Transaction.category_id.isnot(None),
+        Transaction.account_id.in_(db.query(Account.id).filter(Account.user_id == user_id))
     ).order_by(Transaction.id.desc()).first()
 
     if past_tx and past_tx.category_id:
@@ -52,11 +53,12 @@ def detect_cost_type(description: str) -> str:
 
 from datetime import datetime, timedelta
 from typing import Tuple
+from app.services.time_utils import local_now_naive
 
 def resolve_date_range(period: Optional[str]) -> Tuple[Optional[datetime], Optional[datetime]]:
     if not period:
         return None, None
-    now = datetime.utcnow()
+    now = local_now_naive()
     p = period.lower().strip()
 
     if p in ["current_month", "mes_atual", "mês atual"]:

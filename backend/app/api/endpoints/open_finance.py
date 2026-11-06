@@ -8,7 +8,8 @@ import asyncio
 import re
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.entities import Account, Transaction, User, Asset, InvestmentTransaction
+from app.models.entities import Account, Transaction, User, Asset, InvestmentTransaction, PluggyConnection, AssetQuote
+from app.services.time_utils import local_now_naive, to_local_naive
 from app.services.pluggy_service import pluggy_service
 from app.services.categorizer import auto_categorize, detect_cost_type
 from app.api.deps import get_current_user
@@ -28,7 +29,7 @@ async def get_connect_token(current_user: User = Depends(get_current_user)):
         )
 
     try:
-        token = await pluggy_service.create_connect_token()
+        token = await pluggy_service.create_connect_token(str(current_user.id))
         return {"connectToken": token}
     except Exception as e:
         raise HTTPException(
@@ -52,7 +53,7 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
     # Para cartões de crédito: cobranças/compras (DEBIT) são valores positivos na Pluggy, convertemos para negativo (despesa)
     if is_credit_card:
         tx_type = str(p_tx.get("type", "")).upper()
-        if tx_type == "DEBIT" or raw_amount > 0:
+        if tx_type in ("DEBIT", "PURCHASE", "WITHDRAWAL"):
             amount = -abs(raw_amount)
         else:
             amount = abs(raw_amount) # Pagamento de fatura / estorno
@@ -64,11 +65,19 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
         if raw_date:
             clean_date = raw_date.replace("Z", "+00:00")
             dt = datetime.fromisoformat(clean_date)
-            tx_date = dt.replace(tzinfo=None)
+            tx_date = to_local_naive(dt)
         else:
-            tx_date = datetime.utcnow()
+            tx_date = local_now_naive()
     except Exception:
-        tx_date = datetime.utcnow()
+        tx_date = local_now_naive()
+
+    existing = db.query(Transaction).join(Account).filter(Transaction.pluggy_transaction_id == tx_id,
+        Transaction.account_id == account_id, Account.user_id == user_id).first()
+    if existing:
+        existing.description = desc
+        existing.amount = amount
+        existing.date = tx_date
+        return False
 
     cat_id = auto_categorize(desc, user_id, db)
     c_type = detect_cost_type(desc)
@@ -109,39 +118,10 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
                 )
                 db.add(inv_tx)
 
-    # 2. Identificação de Compras/Débitos de investimentos na conta bancária
-    # Débitos de bolsa/corretora não devem ser tratados como despesa de consumo para não inflar despesas pessoais
-    is_invest_debit = any(k in desc_upper for k in [
-        "INTER DTVM", "DEBITO B3", "COMPRA A VISTA B3", "B3 - NEGOCIACAO",
-        "LIQUIDACAO B3", "APLICACAO ACOES", "CORRETORA"
-    ])
+    # Transferências para corretoras não criam compras sem quantidade/preço negociado.
+    is_invest_debit = any(k in desc_upper for k in ["INTER DTVM", "DEBITO B3", "COMPRA A VISTA B3", "B3 - NEGOCIACAO", "LIQUIDACAO B3", "APLICACAO ACOES", "CORRETORA"])
     if not is_credit_card and amount < 0 and is_invest_debit:
-        is_acc = False # Não contabiliza no painel de despesas do dia a dia
-        tk_match = TICKER_REGEX.search(desc_upper)
-        if tk_match:
-            found_ticker = tk_match.group(1)
-            cls_t = "Fundos Imobiliários" if found_ticker.endswith("11") else "Ações"
-            asset = get_or_create_asset(found_ticker, None, cls_t, db)
-
-            already_buy = db.query(InvestmentTransaction).filter(
-                InvestmentTransaction.user_id == user_id,
-                InvestmentTransaction.notes.ilike(f"%PluggyBankTx:{tx_id}%")
-            ).first()
-
-            if not already_buy:
-                buy_tx = InvestmentTransaction(
-                    user_id=user_id,
-                    asset_id=asset.id,
-                    operation_type="buy",
-                    quantity=Decimal("1"),
-                    unit_price=abs(amount),
-                    costs=Decimal("0.00"),
-                    total_amount=abs(amount),
-                    trade_date=tx_date,
-                    source="open_finance",
-                    notes=f"PluggyBankTx:{tx_id} - {desc}"
-                )
-                db.add(buy_tx)
+        is_acc = False
 
     new_tx = Transaction(
         account_id=account_id,
@@ -183,7 +163,10 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
         acc_type = "credit_card" if is_cc else "checking"
         acc_balance = Decimal(str(p_acc.get("balance", 0)))
 
-        account = db.query(Account).filter(Account.pluggy_account_id == p_acc_id).first()
+        account = db.query(Account).filter(Account.pluggy_account_id == p_acc_id, Account.user_id == current_user_id).first()
+        foreign_owner = db.query(Account).filter(Account.pluggy_account_id == p_acc_id, Account.user_id != current_user_id).first()
+        if foreign_owner:
+            raise HTTPException(status_code=403, detail='Conta Pluggy já vinculada a outro usuário.')
         if not account:
             account = Account(
                 user_id=current_user_id,
@@ -249,45 +232,22 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
 
             asset = get_or_create_asset(code, name, asset_type, db)
 
-            qty = Decimal(str(inv.get("quantity") or 1))
-            val = Decimal(str(inv.get("value") or (Decimal(str(inv.get("amount", 0))) / qty if qty > 0 else 0)))
-            amt = Decimal(str(inv.get("amount") or inv.get("balance") or (qty * val)))
-            amount_orig = Decimal(str(inv.get("amountOriginal") or amt))
-            unit_p = (amount_orig / qty).quantize(Decimal("0.01")) if qty > 0 else val
-
-            raw_d = inv.get("date") or ""
-            trade_d = datetime.utcnow()
-            if raw_d:
-                try:
-                    trade_d = datetime.fromisoformat(raw_d.replace("Z", "+00:00")).replace(tzinfo=None)
-                except Exception:
-                    pass
-
-            existing_inv = db.query(InvestmentTransaction).filter(
-                InvestmentTransaction.user_id == current_user_id,
-                InvestmentTransaction.asset_id == asset.id,
-                InvestmentTransaction.source == "open_finance"
-            ).first()
-
-            if not existing_inv:
-                new_inv = InvestmentTransaction(
-                    user_id=current_user_id,
-                    asset_id=asset.id,
-                    operation_type="buy",
-                    quantity=qty,
-                    unit_price=unit_p,
-                    total_amount=amount_orig,
-                    trade_date=trade_d,
-                    source="open_finance",
-                    notes=f"Posição Open Finance ({inv_type})"
-                )
-                db.add(new_inv)
-                synced_invs += 1
-            else:
-                existing_inv.quantity = qty
-                existing_inv.unit_price = unit_p
-                existing_inv.total_amount = amount_orig
-                existing_inv.trade_date = trade_d
+            qty = Decimal(str(inv.get("quantity") or 0))
+            currency = str(inv.get("currencyCode") or inv.get("currency") or "BRL").upper()
+            gross_or_net_amount = inv.get("balance") if inv.get("balance") is not None else inv.get("amount")
+            if qty > 0 and currency == "BRL":
+                if gross_or_net_amount is not None:
+                    unit_quote = Decimal(str(gross_or_net_amount)) / qty
+                elif inv.get("value") is not None:
+                    # Pluggy value is the current unit/quota price, not the position total.
+                    unit_quote = Decimal(str(inv.get("value")))
+                else:
+                    unit_quote = Decimal("0")
+                if unit_quote > 0:
+                    db.add(AssetQuote(user_id=current_user_id, asset_id=asset.id,
+                        price=unit_quote.quantize(Decimal("0.0001")), quantity=qty,
+                        currency=currency, source="pluggy"))
+                    synced_invs += 1
 
             # Transações históricas do investimento: Compras, Vendas, Dividendos, JCP, Rendimentos
             inv_id = inv.get("id")
@@ -329,11 +289,11 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                         elif itx_amt == 0 and itx_val > 0:
                             itx_amt = itx_val
 
-                        itx_d = datetime.utcnow()
+                        itx_d = local_now_naive()
                         itx_raw_d = itx.get("tradeDate") or itx.get("date")
                         if itx_raw_d:
                             try:
-                                itx_d = datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00")).replace(tzinfo=None)
+                                itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00")))
                             except Exception:
                                 pass
 
@@ -366,17 +326,7 @@ async def sync_all_existing_items(
     total_investments = 0
     items_processed = 0
 
-    # 1. Busca todos os items diretamente da Pluggy para garantir que todas as instituições
-    # (inclusive corretoras de investimentos e bancos) sejam mapeadas
-    item_ids = set()
-    try:
-        all_pluggy_items = await pluggy_service.get_all_items()
-        for item in all_pluggy_items:
-            iid = item.get("id")
-            if iid:
-                item_ids.add(str(iid).strip())
-    except Exception as e:
-        print(f"[SYNC_ALL] Aviso ao buscar /items na Pluggy: {e}")
+    item_ids = {row[0] for row in db.query(PluggyConnection.item_id).filter(PluggyConnection.user_id == current_user.id).all()}
 
     # 2. Complementa com item_ids das contas já registradas localmente
     existing_accounts = db.query(Account).filter(
@@ -406,6 +356,7 @@ async def sync_all_existing_items(
             total_investments += invs
             items_processed += 1
         except Exception as e:
+            db.rollback()
             print(f"[SYNC_ALL] Erro ao processar item {item_id}: {e}")
 
     # 3. Garante sincronizacao direta para qualquer conta que ja esteja no banco
@@ -425,6 +376,7 @@ async def sync_all_existing_items(
                 if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
                     total_transactions += 1
         except Exception as e:
+            db.rollback()
             print(f"[SYNC_ALL] Erro ao sincronizar transacoes da conta {acc.id}: {e}")
 
     db.commit()
@@ -446,15 +398,7 @@ async def sync_investments_only(
     Sincroniza especificamente investimentos, compras, vendas e proventos
     de todas as instituições conectadas via Open Finance (Pluggy).
     """
-    item_ids = set()
-    try:
-        all_pluggy_items = await pluggy_service.get_all_items()
-        for item in all_pluggy_items:
-            iid = item.get("id")
-            if iid:
-                item_ids.add(str(iid).strip())
-    except Exception as e:
-        print(f"[SYNC_INVESTMENTS] Aviso ao buscar /items: {e}")
+    item_ids = {row[0] for row in db.query(PluggyConnection.item_id).filter(PluggyConnection.user_id == current_user.id).all()}
 
     existing_accounts = db.query(Account).filter(
         Account.user_id == current_user.id,
@@ -471,6 +415,7 @@ async def sync_investments_only(
             total_invs += invs
             items_done += 1
         except Exception as e:
+            db.rollback()
             print(f"[SYNC_INVESTMENTS] Erro no item {item_id}: {e}")
 
     db.commit()
@@ -491,6 +436,17 @@ async def sync_item(
     if not item_id:
         raise HTTPException(status_code=400, detail="itemId é obrigatório.")
 
+    foreign = db.query(PluggyConnection).filter(PluggyConnection.item_id == str(item_id), PluggyConnection.user_id != current_user.id).first()
+    if foreign:
+        raise HTTPException(status_code=403, detail="Conexão Pluggy vinculada a outro usuário.")
+    connection = db.query(PluggyConnection).filter(PluggyConnection.item_id == str(item_id), PluggyConnection.user_id == current_user.id).first()
+    if not connection:
+        item_info = await pluggy_service.get_item(str(item_id))
+        if not item_info or str(item_info.get("clientUserId") or "") != str(current_user.id):
+            raise HTTPException(status_code=403, detail="Conexão não pertence a este usuário. Reconecte pelo Connect Token da aplicação.")
+        connection = PluggyConnection(user_id=current_user.id, item_id=str(item_id), connector_name=(item_info.get("connector") or {}).get("name"), status=item_info.get("status"))
+        db.add(connection)
+        db.flush()
     try:
         accs, txs, invs, it_status = await _process_item(item_id, current_user.id, db)
         return {
@@ -514,7 +470,7 @@ async def get_open_finance_diagnostics(
     """
     report = {
         "user_id": current_user.id,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": local_now_naive().isoformat(),
         "total_items_found": 0,
         "items": [],
         "database_summary": {
@@ -525,7 +481,10 @@ async def get_open_finance_diagnostics(
     }
 
     try:
-        items = await pluggy_service.get_all_items()
+        owned_ids = {row[0] for row in db.query(PluggyConnection.item_id).filter(PluggyConnection.user_id == current_user.id).all()}
+        owned_ids.update(a.pluggy_item_id for a in db.query(Account).filter(Account.user_id == current_user.id, Account.pluggy_item_id.isnot(None)).all())
+        items = [await pluggy_service.get_item(iid) for iid in owned_ids]
+        items = [item for item in items if item]
         report["total_items_found"] = len(items)
 
         for it in items:

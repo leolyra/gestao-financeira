@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import List, Dict, Any
 import pdfplumber
+from app.services.time_utils import local_now_naive
 
 def parse_decimal(val_str: str) -> Decimal:
     if not val_str:
@@ -92,7 +93,7 @@ def parse_sinacor_pdf(file_bytes: bytes) -> Dict[str, Any]:
         if date_match:
             trade_date = datetime.strptime(date_match.group(1), "%d/%m/%Y")
         else:
-            trade_date = datetime.utcnow()
+            trade_date = local_now_naive()
 
         num_match = re.search(r"Nr\.?\s+nota[:\s]+(\d+)", full_text, re.IGNORECASE)
         if num_match:

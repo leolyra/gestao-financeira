@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import Column, Integer, String, Numeric, DateTime, ForeignKey, Boolean, Text, UniqueConstraint
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -69,6 +69,7 @@ class InvestmentTransaction(Base):
     trade_date = Column(DateTime, nullable=False)
     source = Column(String(50), default="manual") # manual, sinacor_pdf, spreadsheet
     notes = Column(String(255), nullable=True)
+    external_id = Column(String(150), nullable=True, index=True)
 
 class AssetAlert(Base):
     __tablename__ = "asset_alerts"
@@ -94,3 +95,59 @@ class AssetReport(Base):
     ai_summary = Column(Text, nullable=False)
     key_points = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class PluggyConnection(Base):
+    __tablename__ = 'pluggy_connections'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    item_id = Column(String(100), nullable=False, unique=True, index=True)
+    connector_name = Column(String(150), nullable=True)
+    status = Column(String(40), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+class CreditCardBill(Base):
+    __tablename__ = 'credit_card_bills'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey('accounts.id'), nullable=False, index=True)
+    external_id = Column(String(120), nullable=False)
+    due_date = Column(DateTime, nullable=True)
+    closing_date = Column(DateTime, nullable=True)
+    amount = Column(Numeric(14, 2), nullable=False, default=0)
+    paid_amount = Column(Numeric(14, 2), nullable=True)
+    status = Column(String(40), nullable=True)
+    currency = Column(String(8), nullable=False, default='BRL')
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    __table_args__ = (UniqueConstraint('account_id', 'external_id', name='uq_card_bill_account_external'),)
+
+class FinancialGoal(Base):
+    __tablename__ = 'financial_goals'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    name = Column(String(140), nullable=False)
+    target_amount = Column(Numeric(14, 2), nullable=False)
+    current_amount = Column(Numeric(14, 2), nullable=False, default=0)
+    target_date = Column(DateTime, nullable=True)
+    category = Column(String(60), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AssetQuote(Base):
+    __tablename__ = 'asset_quotes'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    asset_id = Column(Integer, ForeignKey('assets.id'), nullable=False, index=True)
+    price = Column(Numeric(14, 4), nullable=False)
+    quantity = Column(Numeric(18, 6), nullable=True)
+    currency = Column(String(8), nullable=False, default='BRL')
+    source = Column(String(40), nullable=False, default='manual')
+    quoted_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+class UserAssetClassification(Base):
+    __tablename__ = 'user_asset_classifications'
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    asset_id = Column(Integer, ForeignKey('assets.id'), nullable=False, index=True)
+    asset_type = Column(String(50), nullable=False)
+    __table_args__ = (UniqueConstraint('user_id', 'asset_id', name='uq_user_asset_classification'),)

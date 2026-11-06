@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 from app.core.database import get_db
-from app.models.entities import Asset, AssetTickerHistory, InvestmentTransaction, User
+from app.models.entities import Asset, AssetTickerHistory, InvestmentTransaction, User, AssetQuote, UserAssetClassification
 from app.schemas.investment import (
     InvestmentTransactionCreate,
     InvestmentTransactionResponse,
@@ -24,6 +24,8 @@ from app.schemas.investment import (
 from app.services.sinacor_parser import parse_sinacor_pdf, guess_asset_type
 from app.services.categorizer import resolve_date_range
 from app.api.deps import get_current_user
+from app.services.time_utils import local_now_naive
+from app.services.portfolio_math import calculate_realized_gain
 
 router = APIRouter(prefix="/investments", tags=["investments"])
 
@@ -110,10 +112,6 @@ def get_or_create_asset(ticker: str, name: Optional[str], asset_type: Optional[s
         db.add(asset)
         db.commit()
         db.refresh(asset)
-    elif asset_type:
-        asset.asset_type = normalized_type
-        db.commit()
-        db.refresh(asset)
     return asset
 
 @router.patch("/assets/{asset_id}/classification")
@@ -126,11 +124,13 @@ def update_asset_classification(
     asset = db.query(Asset).filter(Asset.id == asset_id).first()
     if not asset:
         raise HTTPException(status_code=404, detail="Ativo não encontrado.")
-    
     norm = normalize_asset_class(payload.asset_type)
-    asset.asset_type = norm
+    pref = db.query(UserAssetClassification).filter(UserAssetClassification.user_id == current_user.id, UserAssetClassification.asset_id == asset.id).first()
+    if pref:
+        pref.asset_type = norm
+    else:
+        db.add(UserAssetClassification(user_id=current_user.id, asset_id=asset.id, asset_type=norm))
     db.commit()
-    db.refresh(asset)
     return {
         "status": "success",
         "asset_id": asset.id,
@@ -154,7 +154,7 @@ def load_official_custody(
     ).delete(synchronize_session=False)
 
     count = 0
-    now = datetime.utcnow()
+    now = local_now_naive()
     for item in OFFICIAL_CUSTODY_DATA:
         ticker = item["ticker"]
         name = item["name"]
@@ -198,6 +198,7 @@ def get_portfolio(
         .filter(InvestmentTransaction.user_id == current_user.id)\
         .order_by(InvestmentTransaction.trade_date.asc(), InvestmentTransaction.id.asc()).all()
 
+    class_overrides = {row.asset_id: row.asset_type for row in db.query(UserAssetClassification).filter(UserAssetClassification.user_id == current_user.id).all()}
     by_asset = {}
     for tx, ticker, asset_name, asset_type in txs:
         if not ticker:
@@ -206,7 +207,7 @@ def get_portfolio(
             by_asset[tx.asset_id] = {
                 "ticker": ticker,
                 "name": asset_name or ticker,
-                "asset_type": classify_asset_smart(ticker, asset_type),
+                "asset_type": class_overrides.get(tx.asset_id, classify_asset_smart(ticker, asset_type)),
                 "txs": []
             }
         by_asset[tx.asset_id]["txs"].append(tx)
@@ -226,38 +227,19 @@ def get_portfolio(
             and t.source != "spreadsheet_custodia"
             and "posição open finance" not in (t.notes or "").lower()
         ]
-        snapshot_txs = [
-            t for t in asset_txs
-            if "posição open finance" in (t.notes or "").lower()
-        ]
+        snapshot_txs = []  # Posições correntes são snapshots AssetQuote, não operações.
 
         total_qty = Decimal("0")
         total_cost = Decimal("0.00")
         avg_price = Decimal("0.00")
         total_divs = Decimal("0.00")
 
-        # Proventos deste ativo
+        # Cada evento com ID externo é importado uma única vez; não deduplicar por data/valor.
         if asset_type != "Renda Fixa":
-            seen_div_events = set()
             for tx in asset_txs:
-                op = (tx.operation_type or "").lower().strip()
-                if op in ["dividend", "jcp", "rendimento"]:
-                    if "posição open finance" in (tx.notes or "").lower():
-                        continue
-                    q = Decimal(str(tx.quantity or 0))
-                    u = Decimal(str(tx.unit_price or 0))
-                    amt = Decimal(str(tx.total_amount or 0))
-
-                    if q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
-                        amt = u
-
-                    amt = abs(amt)
-                    if amt > 0:
-                        dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else ""
-                        key = (dt_str, round(float(amt), 2))
-                        if key not in seen_div_events:
-                            seen_div_events.add(key)
-                            total_divs += amt
+                if (tx.operation_type or "").lower().strip() in ["dividend", "jcp", "rendimento"]:
+                    if "posição open finance" not in (tx.notes or "").lower():
+                        total_divs += abs(Decimal(str(tx.total_amount or 0)))
 
         # 1. Se existe custódia consolidada oficial da planilha para este ativo:
         if custodia_txs:
@@ -391,6 +373,15 @@ def create_investment_transaction(
     c = Decimal(str(tx_in.costs or 0))
     t = Decimal(str(tx_in.total_amount or 0))
     op = (tx_in.operation_type or "buy").lower().strip()
+    if op in ["buy", "compra", "sell", "venda"] and q <= 0:
+        raise HTTPException(status_code=400, detail="Quantidade deve ser maior que zero.")
+    if op in ["sell", "venda"]:
+        position = next((p for p in get_portfolio(db, current_user) if p.asset_id == asset.id), None)
+        quote = db.query(AssetQuote).filter(AssetQuote.user_id == current_user.id,
+            AssetQuote.asset_id == asset.id, AssetQuote.quantity.isnot(None)).order_by(AssetQuote.quoted_at.desc()).first()
+        available = Decimal(str(position.quantity)) if position else (Decimal(str(quote.quantity)) if quote else Decimal("0"))
+        if q > available:
+            raise HTTPException(status_code=400, detail=f"Quantidade insuficiente para venda. Disponível: {available}.")
 
     if op in ["dividend", "jcp", "rendimento"]:
         final_total = t if t > 0 else (u if u > 0 else q)
@@ -546,7 +537,7 @@ async def upload_spreadsheet(
         ).delete(synchronize_session=False)
 
         imported = 0
-        now = datetime.utcnow()
+        now = local_now_naive()
         for _, row in df.iterrows():
             ticker_val = str(row[col_ticker]).strip().upper()
             if not ticker_val or ticker_val == "NAN":
@@ -631,12 +622,12 @@ async def upload_spreadsheet(
             else:
                 raw_total = raw_price
 
-        row_date = datetime.utcnow()
+        row_date = local_now_naive()
         if col_date and pd.notna(row[col_date]):
             try:
                 row_date = pd.to_datetime(row[col_date], dayfirst=True).to_pydatetime()
             except Exception:
-                row_date = datetime.utcnow()
+                row_date = local_now_naive()
 
         custom_class = str(row[col_class]).strip() if col_class and pd.notna(row[col_class]) else None
         asset_cls = classify_asset_smart(ticker_val, custom_class)
@@ -731,43 +722,20 @@ def get_investment_summary(
             InvestmentTransaction.operation_type.in_(["dividend", "jcp", "rendimento"])
         ).all()
 
-    hist_dividends = Decimal("0.00")
-    seen_events = set()
+    hist_dividends = sum(
+        (abs(Decimal(str(tx.total_amount or 0))) for tx, asset in all_txs
+         if classify_asset_smart(asset.ticker_current, asset.asset_type) != "Renda Fixa"
+         and "posição open finance" not in (tx.notes or "").lower()),
+        Decimal("0.00")
+    )
 
-    for tx, asset in all_txs:
-        if classify_asset_smart(asset.ticker_current, asset.asset_type) != 'Renda Fixa':
-            if "posição open finance" in (tx.notes or "").lower():
-                continue
-            amt = Decimal(str(tx.total_amount or 0))
-            q = Decimal(str(tx.quantity or 0))
-            u = Decimal(str(tx.unit_price or 0))
-            if q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
-                amt = u
-            amt = abs(amt)
-            if amt > 0:
-                dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else ""
-                key = (tx.asset_id, dt_str, round(float(amt), 2))
-                if key not in seen_events:
-                    seen_events.add(key)
-                    hist_dividends += amt
-
-    now = datetime.utcnow()
+    now = local_now_naive()
     month_start = datetime(now.year, now.month, 1)
-
-    sells = db.query(InvestmentTransaction)\
-        .filter(
-            InvestmentTransaction.user_id == current_user.id,
-            InvestmentTransaction.operation_type == "sell",
-            InvestmentTransaction.trade_date >= month_start
-        ).all()
-
-    monthly_gain = Decimal("0.00")
-    pm_map = {p.asset_id: p.average_price for p in portfolio}
-    for s in sells:
-        pm = pm_map.get(s.asset_id, Decimal("0.00"))
-        cost_basis = Decimal(str(s.quantity)) * pm
-        net_sell = Decimal(str(s.total_amount)) - Decimal(str(s.costs or 0))
-        monthly_gain += (net_sell - cost_basis)
+    ledger = db.query(InvestmentTransaction).filter(
+        InvestmentTransaction.user_id == current_user.id,
+        InvestmentTransaction.operation_type.in_(["buy", "compra", "sell", "venda"])
+    ).order_by(InvestmentTransaction.trade_date.asc(), InvestmentTransaction.id.asc()).all()
+    monthly_gain = calculate_realized_gain(ledger, month_start)
 
     return InvestmentSummary(
         total_equity_invested=total_invested,
@@ -781,45 +749,7 @@ def recalculate_investments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Se a carteira estiver vazia, carrega a custódia oficial consolidada
-    existing_count = db.query(InvestmentTransaction).filter(
-        InvestmentTransaction.user_id == current_user.id
-    ).count()
-
-    if existing_count == 0:
-        load_official_custody(db, current_user)
-
-    # 1. Deduplicação no banco
-    db.execute(text("""
-        DELETE FROM investment_transactions a USING investment_transactions b
-        WHERE a.id > b.id
-          AND a.user_id = b.user_id
-          AND a.asset_id = b.asset_id
-          AND a.operation_type = b.operation_type
-          AND a.total_amount = b.total_amount
-          AND a.trade_date = b.trade_date
-          AND a.user_id = :uid;
-    """), {"uid": current_user.id})
-
-    # 2. Cura proventos multiplicados
-    db.execute(text("""
-        UPDATE investment_transactions
-        SET total_amount = unit_price,
-            unit_price = ROUND(unit_price / NULLIF(quantity, 0), 4)
-        WHERE operation_type IN ('dividend', 'jcp', 'rendimento')
-          AND quantity > 1
-          AND unit_price >= 5.00
-          AND total_amount >= (quantity * unit_price - 0.05)
-          AND user_id = :uid;
-    """), {"uid": current_user.id})
-
-    # 3. Remove snapshots indevidos de dividendos
-    db.execute(text("""
-        DELETE FROM investment_transactions
-        WHERE operation_type IN ('dividend', 'jcp', 'rendimento')
-          AND notes ILIKE '%Posição Open Finance%'
-          AND user_id = :uid;
-    """), {"uid": current_user.id})
+    # Recalcular não exclui nem reescreve operações financeiras automaticamente.
 
     db.commit()
     return get_investment_summary(db, current_user)
@@ -830,8 +760,7 @@ def reset_investment_data(
     current_user: User = Depends(get_current_user)
 ):
     deleted_count = db.query(InvestmentTransaction).filter(
-        (InvestmentTransaction.user_id == current_user.id) |
-        (InvestmentTransaction.user_id.is_(None))
+        InvestmentTransaction.user_id == current_user.id
     ).delete(synchronize_session=False)
     db.commit()
     return {

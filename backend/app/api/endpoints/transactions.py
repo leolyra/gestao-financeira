@@ -22,11 +22,12 @@ from app.schemas.transaction import (
 )
 from app.services.categorizer import auto_categorize, resolve_date_range
 from app.api.deps import get_current_user
+from app.services.time_utils import local_now_naive
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 def resolve_date_range(period: str) -> tuple[Optional[datetime], Optional[datetime]]:
-    now = datetime.utcnow()
+    now = local_now_naive()
     p = (period or "").lower().strip()
     if p == "current_month":
         start = datetime(now.year, now.month, 1, 0, 0, 0)
@@ -105,6 +106,8 @@ def create_transaction(
         raise HTTPException(status_code=404, detail="Conta não encontrada.")
 
     category_id = tx_in.category_id
+    if category_id and not db.query(Category).filter(Category.id == category_id, (Category.user_id == current_user.id) | (Category.user_id.is_(None))).first():
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
     if not category_id:
         category_id = auto_categorize(tx_in.description, current_user.id, db)
 
@@ -153,6 +156,8 @@ def update_transaction_category(
     if not tx:
         raise HTTPException(status_code=404, detail="Transação não encontrada.")
 
+    if cat_update.category_id is not None and not db.query(Category).filter(Category.id == cat_update.category_id, (Category.user_id == current_user.id) | (Category.user_id.is_(None))).first():
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
     tx.category_id = cat_update.category_id
     db.commit()
     db.refresh(tx)
@@ -233,6 +238,11 @@ def update_transaction_accounted(
     if not tx:
         raise HTTPException(status_code=404, detail="Transação não encontrada.")
 
+    if tx.is_manual and tx.is_accounted != payload.is_accounted:
+        account = db.query(Account).filter(Account.id == tx.account_id, Account.user_id == current_user.id).first()
+        if account:
+            delta = Decimal(str(tx.amount)) if payload.is_accounted else -Decimal(str(tx.amount))
+            account.balance = Decimal(str(account.balance or 0)) + delta
     tx.is_accounted = payload.is_accounted
     db.commit()
     db.refresh(tx)
@@ -259,9 +269,9 @@ def get_summary(
         if days >= 3650:
             p_start = None
         else:
-            p_start = datetime.utcnow() - timedelta(days=days)
+            p_start = local_now_naive() - timedelta(days=days)
     else:
-        p_start = datetime.utcnow() - timedelta(days=90)
+        p_start = local_now_naive() - timedelta(days=90)
 
     tx_query = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
         .filter(Account.user_id == current_user.id, Transaction.is_accounted == True)
@@ -416,7 +426,7 @@ def get_historical_evolution(
     if months >= 120:
         since_date = datetime(2000, 1, 1)
     else:
-        since_date = datetime.utcnow() - timedelta(days=months * 31)
+        since_date = local_now_naive() - timedelta(days=months * 31)
 
     transactions = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
         .filter(Account.user_id == current_user.id, Transaction.date >= since_date, Transaction.is_accounted == True)\
@@ -619,7 +629,7 @@ def export_transactions_xlsx(
     wb.save(buf)
     buf.seek(0)
 
-    filename = f"extrato_lancamentos_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    filename = f"extrato_lancamentos_{local_now_naive().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

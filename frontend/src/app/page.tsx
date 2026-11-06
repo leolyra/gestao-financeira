@@ -1728,6 +1728,12 @@ export default function Home() {
         >
           <Tag className="w-4 h-4" /> Categorias ({categories.length})
         </button>
+        <a href="/finance-hub" className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg whitespace-nowrap bg-emerald-700/30 text-emerald-300 hover:bg-emerald-700/50">
+          <span>◎</span> Central Patrimonial
+        </a>
+        <button onClick={async () => { try { const r = await fetchWithAuth("/financial-hub/sync-bills", { method: "POST" }); const d = await r.json(); setPluggyStatusMsg(r.ok ? "Faturas sincronizadas: " + d.bills_synced : (d.detail || "Falha ao sincronizar faturas")); loadAllData(); } catch (e: any) { setPluggyStatusMsg("Erro ao sincronizar faturas: " + e.message); } }} className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg whitespace-nowrap bg-slate-800 text-slate-200 hover:bg-slate-700">
+          Sincronizar faturas
+        </button>
       </nav>
 
       {/* ABA 1: VISÃO GERAL & DASHBOARDS */}

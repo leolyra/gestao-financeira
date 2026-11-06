@@ -204,8 +204,9 @@ def fire_simulator(monthly_contribution:Decimal=Decimal("0"),annual_return_pct:D
     withdrawal=max(Decimal("0.1"),withdrawal_rate_pct)/100
     target=expenses*12/withdrawal
     positions={p.asset_id:p for p in get_portfolio(db,user)};quotes=latest_quotes(db,user.id)
-    capital=sum((money(quotes[p.asset_id].price)*money(quotes[p.asset_id].quantity if quotes[p.asset_id].quantity is not None else p.quantity)
-        for p in positions.values() if p.asset_id in quotes),ZERO)
+    capital=sum((money(q.price)*money(q.quantity if q.quantity is not None else (positions[aid].quantity if aid in positions else 0))
+        for aid,q in quotes.items()),ZERO)
+    starting_capital=capital
     rate=(max(Decimal("-99"),annual_return_pct)/100+1)**(Decimal(1)/12)-1
     months=0
     while capital<target and months<1200 and contribution>0:
@@ -213,7 +214,7 @@ def fire_simulator(monthly_contribution:Decimal=Decimal("0"),annual_return_pct:D
     return {"average_monthly_expenses":expenses,"average_monthly_income":income,
         "monthly_contribution_assumed":contribution,"annual_return_pct":annual_return_pct,
         "withdrawal_rate_pct":withdrawal_rate_pct,"financial_independence_target":target,
-        "starting_invested_capital":capital if months==0 else None,
+        "starting_invested_capital":starting_capital,
         "projected_months":months if capital>=target else None,
         "projected_years":(Decimal(months)/12).quantize(Decimal("0.1")) if capital>=target else None,
         "projected_capital":capital,

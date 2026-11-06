@@ -356,6 +356,7 @@ async def sync_all_existing_items(
             total_investments += invs
             items_processed += 1
         except Exception as e:
+            db.rollback()
             print(f"[SYNC_ALL] Erro ao processar item {item_id}: {e}")
 
     # 3. Garante sincronizacao direta para qualquer conta que ja esteja no banco
@@ -375,6 +376,7 @@ async def sync_all_existing_items(
                 if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
                     total_transactions += 1
         except Exception as e:
+            db.rollback()
             print(f"[SYNC_ALL] Erro ao sincronizar transacoes da conta {acc.id}: {e}")
 
     db.commit()
@@ -413,6 +415,7 @@ async def sync_investments_only(
             total_invs += invs
             items_done += 1
         except Exception as e:
+            db.rollback()
             print(f"[SYNC_INVESTMENTS] Erro no item {item_id}: {e}")
 
     db.commit()

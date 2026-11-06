@@ -226,38 +226,19 @@ def get_portfolio(
             and t.source != "spreadsheet_custodia"
             and "posição open finance" not in (t.notes or "").lower()
         ]
-        snapshot_txs = [
-            t for t in asset_txs
-            if "posição open finance" in (t.notes or "").lower()
-        ]
+        snapshot_txs = []  # Posições correntes são snapshots AssetQuote, não operações.
 
         total_qty = Decimal("0")
         total_cost = Decimal("0.00")
         avg_price = Decimal("0.00")
         total_divs = Decimal("0.00")
 
-        # Proventos deste ativo
+        # Cada evento com ID externo é importado uma única vez; não deduplicar por data/valor.
         if asset_type != "Renda Fixa":
-            seen_div_events = set()
             for tx in asset_txs:
-                op = (tx.operation_type or "").lower().strip()
-                if op in ["dividend", "jcp", "rendimento"]:
-                    if "posição open finance" in (tx.notes or "").lower():
-                        continue
-                    q = Decimal(str(tx.quantity or 0))
-                    u = Decimal(str(tx.unit_price or 0))
-                    amt = Decimal(str(tx.total_amount or 0))
-
-                    if q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
-                        amt = u
-
-                    amt = abs(amt)
-                    if amt > 0:
-                        dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else ""
-                        key = (dt_str, round(float(amt), 2))
-                        if key not in seen_div_events:
-                            seen_div_events.add(key)
-                            total_divs += amt
+                if (tx.operation_type or "").lower().strip() in ["dividend", "jcp", "rendimento"]:
+                    if "posição open finance" not in (tx.notes or "").lower():
+                        total_divs += abs(Decimal(str(tx.total_amount or 0)))
 
         # 1. Se existe custódia consolidada oficial da planilha para este ativo:
         if custodia_txs:
@@ -731,25 +712,12 @@ def get_investment_summary(
             InvestmentTransaction.operation_type.in_(["dividend", "jcp", "rendimento"])
         ).all()
 
-    hist_dividends = Decimal("0.00")
-    seen_events = set()
-
-    for tx, asset in all_txs:
-        if classify_asset_smart(asset.ticker_current, asset.asset_type) != 'Renda Fixa':
-            if "posição open finance" in (tx.notes or "").lower():
-                continue
-            amt = Decimal(str(tx.total_amount or 0))
-            q = Decimal(str(tx.quantity or 0))
-            u = Decimal(str(tx.unit_price or 0))
-            if q > 1 and u >= Decimal("5.00") and amt >= (q * u - Decimal("0.05")):
-                amt = u
-            amt = abs(amt)
-            if amt > 0:
-                dt_str = tx.trade_date.strftime("%Y-%m-%d") if tx.trade_date else ""
-                key = (tx.asset_id, dt_str, round(float(amt), 2))
-                if key not in seen_events:
-                    seen_events.add(key)
-                    hist_dividends += amt
+    hist_dividends = sum(
+        (abs(Decimal(str(tx.total_amount or 0))) for tx, asset in all_txs
+         if classify_asset_smart(asset.ticker_current, asset.asset_type) != "Renda Fixa"
+         and "posição open finance" not in (tx.notes or "").lower()),
+        Decimal("0.00")
+    )
 
     now = datetime.utcnow()
     month_start = datetime(now.year, now.month, 1)

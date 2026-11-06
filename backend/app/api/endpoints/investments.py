@@ -373,6 +373,15 @@ def create_investment_transaction(
     c = Decimal(str(tx_in.costs or 0))
     t = Decimal(str(tx_in.total_amount or 0))
     op = (tx_in.operation_type or "buy").lower().strip()
+    if op in ["buy", "compra", "sell", "venda"] and q <= 0:
+        raise HTTPException(status_code=400, detail="Quantidade deve ser maior que zero.")
+    if op in ["sell", "venda"]:
+        position = next((p for p in get_portfolio(db, current_user) if p.asset_id == asset.id), None)
+        quote = db.query(AssetQuote).filter(AssetQuote.user_id == current_user.id,
+            AssetQuote.asset_id == asset.id, AssetQuote.quantity.isnot(None)).order_by(AssetQuote.quoted_at.desc()).first()
+        available = Decimal(str(position.quantity)) if position else (Decimal(str(quote.quantity)) if quote else Decimal("0"))
+        if q > available:
+            raise HTTPException(status_code=400, detail=f"Quantidade insuficiente para venda. Disponível: {available}.")
 
     if op in ["dividend", "jcp", "rendimento"]:
         final_total = t if t > 0 else (u if u > 0 else q)

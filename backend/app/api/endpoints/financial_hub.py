@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.api.deps import get_current_user
-from app.services.time_utils import local_now_naive
+from app.services.time_utils import local_now_naive, to_local_naive
 from app.models.entities import Account, Asset, AssetQuote, CreditCardBill, FinancialGoal, Transaction, User
 from app.services.pluggy_service import pluggy_service
 from app.api.endpoints.investments import get_portfolio
@@ -104,7 +104,7 @@ async def sync_bills(db: Session = Depends(get_db), user: User = Depends(get_cur
     count=0
     def parse_date(value):
         if not value:return None
-        try:return datetime.fromisoformat(str(value).replace("Z","+00:00")).replace(tzinfo=None)
+        try:return to_local_naive(datetime.fromisoformat(str(value).replace("Z","+00:00")) )
         except Exception:return None
     for account in accounts:
         for item in await pluggy_service.get_bills(account.pluggy_account_id):

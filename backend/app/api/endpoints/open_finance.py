@@ -486,6 +486,14 @@ async def get_open_finance_diagnostics(
         }
     }
 
+    # Distribuição mensal do que já está persistido no PostgreSQL.
+    db_months = {}
+    db_rows = db.query(Transaction.date).join(Account).filter(Account.user_id == current_user.id).all()
+    for (tx_date,) in db_rows:
+        month = tx_date.strftime("%Y-%m") if tx_date else "sem_data"
+        db_months[month] = db_months.get(month, 0) + 1
+    report["database_summary"]["transactions_by_month"] = dict(sorted(db_months.items(), reverse=True))
+
     try:
         owned_ids = {row[0] for row in db.query(PluggyConnection.item_id).filter(PluggyConnection.user_id == current_user.id).all()}
         owned_ids.update(a.pluggy_item_id for a in db.query(Account).filter(Account.user_id == current_user.id, Account.pluggy_item_id.isnot(None)).all())
@@ -503,6 +511,22 @@ async def get_open_finance_diagnostics(
             item_accounts = await pluggy_service.get_accounts(it_id) if it_id else []
             item_investments = await pluggy_service.get_investments(it_id) if it_id else []
 
+            account_diagnostics = []
+            for account_data in item_accounts:
+                pluggy_account_id = account_data.get("id")
+                tx_rows = await pluggy_service.get_transactions(pluggy_account_id) if pluggy_account_id else []
+                tx_months = {}
+                for tx_row in tx_rows:
+                    raw_tx_date = str(tx_row.get("date") or tx_row.get("createdAt") or "")
+                    month = raw_tx_date[:7] if len(raw_tx_date) >= 7 else "sem_data"
+                    tx_months[month] = tx_months.get(month, 0) + 1
+                account_diagnostics.append({
+                    "name": account_data.get("name"),
+                    "type": account_data.get("type"),
+                    "transactions_returned": len(tx_rows),
+                    "transactions_by_month": dict(sorted(tx_months.items(), reverse=True))
+                })
+
             report["items"].append({
                 "item_id": it_id,
                 "connector_name": it_connector,
@@ -511,14 +535,7 @@ async def get_open_finance_diagnostics(
                 "declared_resources": res_data,
                 "accounts_count": len(item_accounts),
                 "investments_count": len(item_investments),
-                "accounts": [
-                    {
-                        "id": a.get("id"),
-                        "name": a.get("name"),
-                        "type": a.get("type"),
-                        "subtype": a.get("subtype")
-                    } for a in item_accounts
-                ],
+                "accounts": account_diagnostics,
                 "investments": [
                     {
                         "id": i.get("id"),

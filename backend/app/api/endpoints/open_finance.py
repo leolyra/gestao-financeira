@@ -514,17 +514,33 @@ async def get_open_finance_diagnostics(
             account_diagnostics = []
             for account_data in item_accounts:
                 pluggy_account_id = account_data.get("id")
-                tx_rows = await pluggy_service.get_transactions(pluggy_account_id) if pluggy_account_id else []
+                endpoint_diagnostics = {}
+                combined_rows = []
+                if pluggy_account_id:
+                    for endpoint_path in ("/v2/transactions", "/transactions"):
+                        try:
+                            rows = await pluggy_service._get_all_pages(
+                                endpoint_path,
+                                {"accountId": pluggy_account_id, "from": "2000-01-01"}
+                            )
+                            endpoint_diagnostics[endpoint_path] = {"count": len(rows)}
+                            if rows and not combined_rows:
+                                combined_rows = rows
+                        except Exception as endpoint_error:
+                            # Retorna a falha da API, nunca credenciais ou headers.
+                            endpoint_diagnostics[endpoint_path] = {"error": str(endpoint_error)[:500]}
                 tx_months = {}
-                for tx_row in tx_rows:
+                for tx_row in combined_rows:
                     raw_tx_date = str(tx_row.get("date") or tx_row.get("createdAt") or "")
                     month = raw_tx_date[:7] if len(raw_tx_date) >= 7 else "sem_data"
                     tx_months[month] = tx_months.get(month, 0) + 1
                 account_diagnostics.append({
+                    "pluggy_account_id": pluggy_account_id,
                     "name": account_data.get("name"),
                     "type": account_data.get("type"),
-                    "transactions_returned": len(tx_rows),
-                    "transactions_by_month": dict(sorted(tx_months.items(), reverse=True))
+                    "transactions_returned": len(combined_rows),
+                    "transactions_by_month": dict(sorted(tx_months.items(), reverse=True)),
+                    "endpoint_diagnostics": endpoint_diagnostics
                 })
 
             report["items"].append({

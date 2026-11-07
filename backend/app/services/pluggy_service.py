@@ -144,17 +144,51 @@ class PluggyService:
             if len(collected)==previous_count: break
         return collected
 
+    async def _get_cursor_pages(self, path: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Percorre endpoints Pluggy v2 seguindo literalmente o campo next."""
+        collected: List[Dict[str, Any]] = []
+        seen_ids = set()
+        next_query: Optional[str] = None
+        seen_cursors = set()
+
+        for _ in range(1000):
+            request_path = path + next_query if next_query else path
+            response = await self._request(
+                "GET",
+                request_path,
+                params=params if next_query is None else None
+            )
+            if response.status_code != 200:
+                raise Exception(f"Pluggy {path} retornou {response.status_code}: {response.text}")
+
+            payload = response.json()
+            for row in payload.get("results", []):
+                row_id = row.get("id")
+                key = str(row_id) if row_id is not None else repr(row)
+                if key not in seen_ids:
+                    seen_ids.add(key)
+                    collected.append(row)
+
+            next_value = payload.get("next")
+            if not next_value:
+                return collected
+            if not isinstance(next_value, str) or not next_value.startswith("?"):
+                raise Exception(f"Pluggy {path} retornou cursor next inválido.")
+            if next_value in seen_cursors:
+                raise Exception(f"Pluggy {path} repetiu o cursor de paginação.")
+            seen_cursors.add(next_value)
+            next_query = next_value
+
+        raise Exception(f"Pluggy {path} excedeu o limite de 1000 páginas.")
+
     async def get_transactions(self, account_id: str, bill_id: Optional[str] = None, from_date: Optional[str] = None) -> List[Dict[str, Any]]:
-        params={"accountId":account_id}
-        if bill_id: params["billId"]=bill_id
-        else: params["from"]=from_date or "2000-01-01"
-        for path in ("/v2/transactions","/transactions"):
-            try:
-                rows=await self._get_all_pages(path,params)
-                if rows:return rows
-            except Exception as exc:
-                print(f"[PLUGGY] Falha paginando {path}: {exc}")
-        return []
+        # GET /v2/transactions aceita accountId e filtros dateFrom/dateTo,
+        # não aceita from/page/pageSize nem billId. Transações de cartão
+        # são recuperadas pela conta; não chamar o endpoint legado /transactions.
+        params: Dict[str, Any] = {"accountId": account_id}
+        if from_date:
+            params["dateFrom"] = from_date
+        return await self._get_cursor_pages("/v2/transactions", params)
 
     async def get_investments(self, item_id: str) -> List[Dict[str, Any]]:
         try: return await self._get_all_pages("/investments", {"itemId": item_id})

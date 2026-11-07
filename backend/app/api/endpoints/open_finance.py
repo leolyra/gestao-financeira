@@ -195,14 +195,8 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
         # 1. Transações diretas da conta
         p_txs = await pluggy_service.get_transactions(p_acc_id)
         
-        # 2. Se for cartão de crédito (ou suspeita), busca também faturas (bills) e suas transações
-        if is_cc:
-            bills = await pluggy_service.get_bills(p_acc_id)
-            for b in bills:
-                b_id = b.get("id")
-                if b_id:
-                    b_txs = await pluggy_service.get_transactions(p_acc_id, bill_id=b_id)
-                    p_txs.extend(b_txs)
+        # A API v2 retorna as transações da conta (inclusive cartão) em cursor.
+        # Não consultar novamente por fatura: billId não é parâmetro deste endpoint.
 
         for p_tx in p_txs:
             if _save_transaction(p_tx, account.id, is_cc, current_user_id, db):
@@ -370,14 +364,6 @@ async def sync_all_existing_items(
         is_cc = (acc.type == "credit_card")
         try:
             p_txs = await pluggy_service.get_transactions(acc.pluggy_account_id)
-            if is_cc:
-                bills = await pluggy_service.get_bills(acc.pluggy_account_id)
-                for b in bills:
-                    b_id = b.get("id")
-                    if b_id:
-                        b_txs = await pluggy_service.get_transactions(acc.pluggy_account_id, bill_id=b_id)
-                        p_txs.extend(b_txs)
-
             for p_tx in p_txs:
                 if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
                     total_transactions += 1
@@ -517,18 +503,12 @@ async def get_open_finance_diagnostics(
                 endpoint_diagnostics = {}
                 combined_rows = []
                 if pluggy_account_id:
-                    for endpoint_path in ("/v2/transactions", "/transactions"):
-                        try:
-                            rows = await pluggy_service._get_all_pages(
-                                endpoint_path,
-                                {"accountId": pluggy_account_id, "from": "2000-01-01"}
-                            )
-                            endpoint_diagnostics[endpoint_path] = {"count": len(rows)}
-                            if rows and not combined_rows:
-                                combined_rows = rows
-                        except Exception as endpoint_error:
-                            # Retorna a falha da API, nunca credenciais ou headers.
-                            endpoint_diagnostics[endpoint_path] = {"error": str(endpoint_error)[:500]}
+                    try:
+                        combined_rows = await pluggy_service.get_transactions(pluggy_account_id)
+                        endpoint_diagnostics["/v2/transactions"] = {"count": len(combined_rows)}
+                    except Exception as endpoint_error:
+                        # Retorna a falha da API, nunca credenciais ou headers.
+                        endpoint_diagnostics["/v2/transactions"] = {"error": str(endpoint_error)[:500]}
                 tx_months = {}
                 for tx_row in combined_rows:
                     raw_tx_date = str(tx_row.get("date") or tx_row.get("createdAt") or "")

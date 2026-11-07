@@ -84,7 +84,9 @@ def list_transactions(
     if end_date:
         query = query.filter(Transaction.date <= end_date)
 
-    results = query.order_by(Transaction.date.desc()).limit(200).all()
+    # Não limitar a 200 registros: datas futuras ou grande volume recente
+    # não podem ocultar lançamentos históricos do extrato.
+    results = query.order_by(Transaction.date.desc(), Transaction.id.desc()).all()
     
     response = []
     for tx, cat_name, cat_color, acc_name in results:

@@ -75,14 +75,18 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
     # O ID da transação Pluggy é único dentro do conjunto de conexões do usuário.
     # Procuramos por usuário (não globalmente) para impedir duplicatas entre
     # sincronização da conta e importação das transações da fatura.
-    existing = db.query(Transaction).join(Account).filter(
-        Transaction.pluggy_transaction_id == tx_id,
-        Account.user_id == user_id
+    # O identificador externo é verificado dentro da conta de destino.
+    # Isso evita que IDs iguais em contas diferentes provoquem sobrescrita cruzada.
+    existing = db.query(Transaction).filter(
+        Transaction.account_id == account_id,
+        Transaction.pluggy_transaction_id == tx_id
     ).first()
     if existing:
-        existing.description = desc
-        existing.amount = amount
-        existing.date = tx_date
+        # Lançamentos manuais nunca devem ser sobrescritos pela sincronização.
+        if not existing.is_manual:
+            existing.description = desc
+            existing.amount = amount
+            existing.date = tx_date
         return False
 
     cat_id = auto_categorize(desc, user_id, db)
@@ -359,17 +363,8 @@ async def sync_all_existing_items(
             db.rollback()
             print(f"[SYNC_ALL] Erro ao processar item {item_id}: {e}")
 
-    # 3. Garante sincronizacao direta para qualquer conta que ja esteja no banco
-    for acc in existing_accounts:
-        is_cc = (acc.type == "credit_card")
-        try:
-            p_txs = await pluggy_service.get_transactions(acc.pluggy_account_id)
-            for p_tx in p_txs:
-                if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
-                    total_transactions += 1
-        except Exception as e:
-            db.rollback()
-            print(f"[SYNC_ALL] Erro ao sincronizar transacoes da conta {acc.id}: {e}")
+    # As contas vinculadas aos itens já foram processadas em _process_item.
+    # Não repetir a consulta aqui: isso duplicava chamadas e podia causar contagens confusas.
 
     db.commit()
 

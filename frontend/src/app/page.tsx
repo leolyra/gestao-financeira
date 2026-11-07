@@ -2523,7 +2523,7 @@ export default function Home() {
           const matchCat = (t.category_name || '').toLowerCase().includes(s);
           if (!matchDesc && !matchAmt && !matchCat) return false;
         }
-        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+        if (filterAccount !== 'all' && !filterAccount.split(',').includes(String(t.account_id))) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
@@ -2733,7 +2733,7 @@ export default function Home() {
           const matchCat = (t.category_name || '').toLowerCase().includes(s);
           if (!matchDesc && !matchAmt && !matchCat) return false;
         }
-        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+        if (filterAccount !== 'all' && !filterAccount.split(',').includes(String(t.account_id))) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;

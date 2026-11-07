@@ -151,3 +151,15 @@ class UserAssetClassification(Base):
     asset_id = Column(Integer, ForeignKey('assets.id'), nullable=False, index=True)
     asset_type = Column(String(50), nullable=False)
     __table_args__ = (UniqueConstraint('user_id', 'asset_id', name='uq_user_asset_classification'),)
+
+
+class MCPAuditLog(Base):
+    __tablename__ = "mcp_audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    action = Column(String(80), nullable=False)
+    entity_type = Column(String(80), nullable=False)
+    entity_id = Column(String(80), nullable=False)
+    before_json = Column(Text, nullable=False)
+    after_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

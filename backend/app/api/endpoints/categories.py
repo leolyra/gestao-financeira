@@ -45,7 +45,7 @@ def list_categories(
 
     category_groups = {}
     for category in categories:
-        key = normalized_name(category.name)
+        key = (normalized_name(category.name), (category.type or "both").casefold())
         current = category_groups.get(key)
         if current is None or (current.user_id is None and category.user_id == current_user.id):
             category_groups[key] = category
@@ -81,7 +81,7 @@ def list_categories(
     # Consolida estatísticas de categorias globais e particulares homônimas.
     stats_by_name = {}
     for category in categories:
-        key = normalized_name(category.name)
+        key = (normalized_name(category.name), (category.type or "both").casefold())
         stats = stats_by_name.setdefault(key, {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
         source = cat_stats.get(category.id)
         if source:
@@ -91,7 +91,7 @@ def list_categories(
 
     results = []
     for cat in category_groups.values():
-        stats = stats_by_name.get(normalized_name(cat.name), {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
+        stats = stats_by_name.get((normalized_name(cat.name), (cat.type or "both").casefold()), {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
         inc = float(stats["income"])
         exp = float(stats["expense"])
         bal = inc - exp

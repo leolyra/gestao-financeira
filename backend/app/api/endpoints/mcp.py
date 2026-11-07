@@ -3,6 +3,7 @@ No arbitrary SQL is exposed. Mutations are typed, scoped, and require explicit a
 """
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -27,7 +28,7 @@ TOOLS = [
 
 def is_excluded(ticker, asset_type, name):
  t=(ticker or "").upper(); typ=(asset_type or "").casefold(); nm=(name or "").upper()
- return t.endswith(("12","13")) or any(x in typ for x in EXCLUDED_TYPES) or any(x in nm for x in STRUCTURED_TERMS)
+ return (t.endswith(("12","13")) or re.match(r"^[A-Z]{4}[A-Z]\\d{2,3}$", t) is not None or re.match(r"^(WIN|WDO|IND|DOL)[A-Z0-9]*$", t) is not None or any(x in typ for x in EXCLUDED_TYPES) or any(x in nm for x in STRUCTURED_TERMS))
 
 def tool_result(data):
  return {"content":[{"type":"text","text":json.dumps(data,ensure_ascii=False,default=str)}]}

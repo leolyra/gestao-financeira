@@ -195,14 +195,8 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
         # 1. Transações diretas da conta
         p_txs = await pluggy_service.get_transactions(p_acc_id)
         
-        # 2. Se for cartão de crédito (ou suspeita), busca também faturas (bills) e suas transações
-        if is_cc:
-            bills = await pluggy_service.get_bills(p_acc_id)
-            for b in bills:
-                b_id = b.get("id")
-                if b_id:
-                    b_txs = await pluggy_service.get_transactions(p_acc_id, bill_id=b_id)
-                    p_txs.extend(b_txs)
+        # A API v2 retorna as transações da conta (inclusive cartão) em cursor.
+        # Não consultar novamente por fatura: billId não é parâmetro deste endpoint.
 
         for p_tx in p_txs:
             if _save_transaction(p_tx, account.id, is_cc, current_user_id, db):
@@ -370,14 +364,6 @@ async def sync_all_existing_items(
         is_cc = (acc.type == "credit_card")
         try:
             p_txs = await pluggy_service.get_transactions(acc.pluggy_account_id)
-            if is_cc:
-                bills = await pluggy_service.get_bills(acc.pluggy_account_id)
-                for b in bills:
-                    b_id = b.get("id")
-                    if b_id:
-                        b_txs = await pluggy_service.get_transactions(acc.pluggy_account_id, bill_id=b_id)
-                        p_txs.extend(b_txs)
-
             for p_tx in p_txs:
                 if _save_transaction(p_tx, acc.id, is_cc, current_user.id, db):
                     total_transactions += 1

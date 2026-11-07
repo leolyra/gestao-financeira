@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.endpoints import auth, accounts, categories, transactions, open_finance, investments, monitoring, financial_hub
+from app.api.endpoints import auth, accounts, categories, transactions, open_finance, investments, monitoring, financial_hub, mcp
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -11,3 +11,4 @@ api_router.include_router(investments.router)
 api_router.include_router(monitoring.router)
 
 api_router.include_router(financial_hub.router)
+api_router.include_router(mcp.router)

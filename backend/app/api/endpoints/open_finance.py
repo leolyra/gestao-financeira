@@ -517,18 +517,12 @@ async def get_open_finance_diagnostics(
                 endpoint_diagnostics = {}
                 combined_rows = []
                 if pluggy_account_id:
-                    for endpoint_path in ("/v2/transactions", "/transactions"):
-                        try:
-                            rows = await pluggy_service._get_all_pages(
-                                endpoint_path,
-                                {"accountId": pluggy_account_id, "from": "2000-01-01"}
-                            )
-                            endpoint_diagnostics[endpoint_path] = {"count": len(rows)}
-                            if rows and not combined_rows:
-                                combined_rows = rows
-                        except Exception as endpoint_error:
-                            # Retorna a falha da API, nunca credenciais ou headers.
-                            endpoint_diagnostics[endpoint_path] = {"error": str(endpoint_error)[:500]}
+                    try:
+                        combined_rows = await pluggy_service.get_transactions(pluggy_account_id)
+                        endpoint_diagnostics["/v2/transactions"] = {"count": len(combined_rows)}
+                    except Exception as endpoint_error:
+                        # Retorna a falha da API, nunca credenciais ou headers.
+                        endpoint_diagnostics["/v2/transactions"] = {"error": str(endpoint_error)[:500]}
                 tx_months = {}
                 for tx_row in combined_rows:
                     raw_tx_date = str(tx_row.get("date") or tx_row.get("createdAt") or "")

@@ -400,7 +400,7 @@ def get_summary(
             # Saldo de despesas compensado com eventuais creditos/estornos da categoria
             net_expense = max(c_data["expense"] - c_data["income"], Decimal("0.00"))
             expenses_by_cat.append({
-                "name": c_name,
+                "name": c_data["name"],
                 "value": float(net_expense),
                 "gross_expense": float(c_data["expense"]),
                 "credits": float(c_data["income"]),

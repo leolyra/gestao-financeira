@@ -273,7 +273,7 @@ def get_summary(
     else:
         p_start = local_now_naive() - timedelta(days=90)
 
-    tx_query = db.query(Transaction, Category.name, Category.color).join(Account).outerjoin(Category)\
+    tx_query = db.query(Transaction, Category.name, Category.color, Category.type).join(Account).outerjoin(Category)\
         .filter(Account.user_id == current_user.id, Transaction.is_accounted == True)
 
     if p_start:
@@ -297,6 +297,7 @@ def get_summary(
     total_income = Decimal("0.00")
     total_expense = Decimal("0.00")
     cat_totals = {}
+    category_display_names = {}
     monthly_trend_dict = {}
 
     fixed_expense = Decimal("0.00")
@@ -309,7 +310,7 @@ def get_summary(
     futilidade_count = 0
     futilidade_by_cat = {}
 
-    for tx, cat_name, cat_color in transactions:
+    for tx, cat_name, cat_color, cat_type in transactions:
         amt = Decimal(str(tx.amount))
         month_key = tx.date.strftime("%Y-%m")
         c_type = str(getattr(tx, "cost_type", None) or "variavel").lower()
@@ -322,14 +323,16 @@ def get_summary(
         if month_key not in monthly_trend_dict:
             monthly_trend_dict[month_key] = {"month": month_key, "income": Decimal("0"), "expense": Decimal("0"), "fixed_expense": Decimal("0"), "variable_expense": Decimal("0")}
 
-        c_name = cat_name or "Sem Categoria"
-        if c_name not in cat_totals:
-            cat_totals[c_name] = {"name": c_name, "income": Decimal("0.00"), "expense": Decimal("0.00"), "color": cat_color or "#94a3b8"}
+        c_name = " ".join((cat_name or "Sem Categoria").split())
+        category_key = (c_name.casefold(), (cat_type or "both").casefold())
+        display_name = category_display_names.setdefault(category_key, c_name)
+        if category_key not in cat_totals:
+            cat_totals[category_key] = {"name": display_name, "income": Decimal("0.00"), "expense": Decimal("0.00"), "color": cat_color or "#94a3b8"}
 
         if amt > 0:
             total_income += amt
             monthly_trend_dict[month_key]["income"] += amt
-            cat_totals[c_name]["income"] += amt
+            cat_totals[category_key]["income"] += amt
             if "fix" in c_type:
                 fixed_income += amt
             else:
@@ -338,7 +341,7 @@ def get_summary(
             abs_amt = abs(amt)
             total_expense += abs_amt
             monthly_trend_dict[month_key]["expense"] += abs_amt
-            cat_totals[c_name]["expense"] += abs_amt
+            cat_totals[category_key]["expense"] += abs_amt
             if "fix" in c_type:
                 fixed_expense += abs_amt
                 monthly_trend_dict[month_key]["fixed_expense"] += abs_amt

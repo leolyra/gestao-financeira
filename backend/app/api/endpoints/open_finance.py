@@ -42,21 +42,22 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
     if not tx_id:
         return False
     
-    existing = db.query(Transaction).filter(Transaction.pluggy_transaction_id == tx_id).first()
-    if existing:
-        return False
-
     desc = p_tx.get("description") or "Transação Bancária"
     desc_upper = desc.upper()
     raw_amount = Decimal(str(p_tx.get("amount", 0)))
     
-    # Para cartões de crédito: cobranças/compras (DEBIT) são valores positivos na Pluggy, convertemos para negativo (despesa)
+    # A Pluggy informa a natureza da movimentação em "type". Normalizamos o
+    # sinal para que CREDIT seja receita e DEBIT seja despesa em contas bancárias.
+    tx_type = str(p_tx.get("type", "")).upper().strip()
     if is_credit_card:
-        tx_type = str(p_tx.get("type", "")).upper()
         if tx_type in ("DEBIT", "PURCHASE", "WITHDRAWAL"):
             amount = -abs(raw_amount)
         else:
-            amount = abs(raw_amount) # Pagamento de fatura / estorno
+            amount = abs(raw_amount)  # pagamento/estorno/crédito no cartão
+    elif tx_type in ("CREDIT", "DEPOSIT", "TRANSFER_IN", "REFUND"):
+        amount = abs(raw_amount)
+    elif tx_type in ("DEBIT", "PURCHASE", "WITHDRAWAL", "TRANSFER_OUT", "PAYMENT"):
+        amount = -abs(raw_amount)
     else:
         amount = raw_amount
 
@@ -71,8 +72,13 @@ def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id
     except Exception:
         tx_date = local_now_naive()
 
-    existing = db.query(Transaction).join(Account).filter(Transaction.pluggy_transaction_id == tx_id,
-        Transaction.account_id == account_id, Account.user_id == user_id).first()
+    # O ID da transação Pluggy é único dentro do conjunto de conexões do usuário.
+    # Procuramos por usuário (não globalmente) para impedir duplicatas entre
+    # sincronização da conta e importação das transações da fatura.
+    existing = db.query(Transaction).join(Account).filter(
+        Transaction.pluggy_transaction_id == tx_id,
+        Account.user_id == user_id
+    ).first()
     if existing:
         existing.description = desc
         existing.amount = amount

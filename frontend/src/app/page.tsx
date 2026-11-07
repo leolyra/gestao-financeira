@@ -368,6 +368,15 @@ export default function Home() {
   const [newTxCostType, setNewTxCostType] = useState<'variavel' | 'fixa'>('variavel');
   const [newTxIsAccounted, setNewTxIsAccounted] = useState<boolean>(true);
   const [filterAccount, setFilterAccount] = useState<string>('all');
+  // Agrupa opções com o mesmo nome/tipo sem perder lançamentos vinculados
+  // a IDs locais diferentes: selecionar a opção inclui todos os IDs do grupo.
+  const accountFilterOptions = Object.values(accounts.reduce((groups, account) => {
+    const key = `${account.name.trim().toLocaleLowerCase('pt-BR')}::${account.type}`;
+    if (!groups[key]) groups[key] = { key, name: account.name, type: account.type, ids: [] as number[] };
+    groups[key].ids.push(account.id);
+    return groups;
+  }, {} as Record<string, { key: string; name: string; type: string; ids: number[] }>));
+
   const [filterCategory, setFilterCategory] = useState<string>('all');
   const [filterCostType, setFilterCostType] = useState<'all' | 'fixa' | 'variavel'>('all');
   const [filterAccounted, setFilterAccounted] = useState<'all' | 'yes' | 'no'>('all');
@@ -1004,7 +1013,7 @@ export default function Home() {
           const matchCat = (t.category_name || '').toLowerCase().includes(s);
           if (!matchDesc && !matchAmt && !matchCat) return false;
         }
-        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+        if (filterAccount !== 'all' && !filterAccount.split(',').includes(String(t.account_id))) return false;
         if (filterCategory !== 'all') {
           if (filterCategory === 'none' && t.category_id) return false;
           if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
@@ -2514,7 +2523,7 @@ export default function Home() {
           const matchCat = (t.category_name || '').toLowerCase().includes(s);
           if (!matchDesc && !matchAmt && !matchCat) return false;
         }
-        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+        if (filterAccount !== 'all' && !filterAccount.split(',').includes(String(t.account_id))) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;
@@ -2562,8 +2571,8 @@ export default function Home() {
                   title="Filtrar por Conta Bancária ou Cartão"
                 >
                   <option value="all">Todas as Contas</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={String(a.id)}>{a.name}</option>
+                  {accountFilterOptions.map((option) => (
+                    <option key={option.key} value={option.ids.join(',')}>{option.name}</option>
                   ))}
                 </select>
 
@@ -2724,7 +2733,7 @@ export default function Home() {
           const matchCat = (t.category_name || '').toLowerCase().includes(s);
           if (!matchDesc && !matchAmt && !matchCat) return false;
         }
-        if (filterAccount !== 'all' && String(t.account_id) !== filterAccount) return false;
+        if (filterAccount !== 'all' && !filterAccount.split(',').includes(String(t.account_id))) return false;
                     if (filterCategory !== 'all') {
                       if (filterCategory === 'none' && t.category_id) return false;
                       if (filterCategory !== 'none' && String(t.category_id) !== filterCategory) return false;

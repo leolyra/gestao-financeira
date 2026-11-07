@@ -36,7 +36,19 @@ def list_categories(
 
     categories = db.query(Category).filter(
         or_(Category.user_id == current_user.id, Category.user_id == None)
-    ).order_by(Category.name.asc()).all()
+    ).order_by(Category.name.asc(), Category.user_id.asc()).all()
+
+    # Se houver categoria particular com o mesmo nome de uma categoria global,
+    # mantém a particular na lista de filtros e consolida os totais dos dois IDs.
+    def normalized_name(value: str) -> str:
+        return " ".join((value or "").casefold().split())
+
+    category_groups = {}
+    for category in categories:
+        key = (normalized_name(category.name), (category.type or "both").casefold())
+        current = category_groups.get(key)
+        if current is None or (current.user_id is None and category.user_id == current_user.id):
+            category_groups[key] = category
 
     p_start, p_end = resolve_date_range(period)
 
@@ -66,9 +78,20 @@ def list_categories(
         else:
             cat_stats[cat_id]["expense"] += abs(amt_dec)
 
+    # Consolida estatísticas de categorias globais e particulares homônimas.
+    stats_by_name = {}
+    for category in categories:
+        key = (normalized_name(category.name), (category.type or "both").casefold())
+        stats = stats_by_name.setdefault(key, {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
+        source = cat_stats.get(category.id)
+        if source:
+            stats["income"] += source["income"]
+            stats["expense"] += source["expense"]
+            stats["count"] += source["count"]
+
     results = []
-    for cat in categories:
-        stats = cat_stats.get(cat.id, {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
+    for cat in category_groups.values():
+        stats = stats_by_name.get((normalized_name(cat.name), (cat.type or "both").casefold()), {"income": Decimal("0.00"), "expense": Decimal("0.00"), "count": 0})
         inc = float(stats["income"])
         exp = float(stats["expense"])
         bal = inc - exp

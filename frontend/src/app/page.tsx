@@ -2073,7 +2073,14 @@ export default function Home() {
                 <TrendingUp className="w-4 h-4 text-emerald-400" /> Histórico Mensal (Receitas vs Despesas)
               </h3>
               <div className="space-y-4">
-                {summary?.monthly_trend.map((m) => {
+                {summary?.monthly_trend
+                  .filter((m) => {
+                    const now = new Date();
+                    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+                    return m.month <= currentMonth;
+                  })
+                  .sort((a, b) => b.month.localeCompare(a.month))
+                  .map((m) => {
                   const inc = Number(m.income);
                   const exp = Number(m.expense);
                   const maxVal = Math.max(inc, exp, 1);

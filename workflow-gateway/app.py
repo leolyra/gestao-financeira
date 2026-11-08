@@ -243,7 +243,7 @@ async def approve_proposal(proposal_id: str, request: Request, approver: str = D
     # Atomically claim the proposal before making the external API call. A proposal
     # can never be approved/executed a second time, including after an uncertain timeout.
     now = datetime.now(timezone.utc)
-    with connect_db() as conn:
+    with db_session() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM proposals WHERE id = ?", (proposal_id,)).fetchone()
         if row is None:
@@ -274,7 +274,7 @@ async def approve_proposal(proposal_id: str, request: Request, approver: str = D
     try:
         result = await n8n_request(method, path, payload=payload)
     except HTTPException as exc:
-        with connect_db() as conn:
+        with db_session() as conn:
             conn.execute(
                 "UPDATE proposals SET status='failed', result=? WHERE id=? AND status='executing'",
                 (json.dumps({"http_status": exc.status_code, "detail": "n8n operation failed"}), proposal_id),
@@ -282,7 +282,7 @@ async def approve_proposal(proposal_id: str, request: Request, approver: str = D
         audit(operation, proposal_id, "failed", request, approver)
         raise
 
-    with connect_db() as conn:
+    with db_session() as conn:
         conn.execute(
             "UPDATE proposals SET status='completed', completed_at=?, result=? WHERE id=? AND status='executing'",
             (datetime.now(timezone.utc).isoformat(), json.dumps(result, ensure_ascii=False), proposal_id),

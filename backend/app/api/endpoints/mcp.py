@@ -16,19 +16,37 @@ logger = logging.getLogger("finance_api.mcp")
 router = APIRouter(tags=["mcp"])
 PROTOCOL_VERSION = "2025-03-26"
 ASSET_CLASSES = {"Ações", "Fundos Imobiliários", "Internacional", "Renda Fixa", "Criptos", "ETF", "BDR", "Fundos de investimento", "Tesouro Direto"}
-EXCLUDED_TYPES = ("opções", "derivativos", "futuros", "estruturados")
-STRUCTURED_TERMS = ("CRA", "CRI", "DEBENTURE", "SUBSCR", "RECIBO")
+EXCLUDED_TYPES = ("opções", "opcao", "derivativos", "futuros", "estruturados")
+STRUCTURED_TERMS = ("CRA", "CRI", "DEBENTURE", "DEBÊNTURE", "SUBSCR", "RECIBO", "COE", "TERMO", "SWAP", "WARRANT", "OPÇÃO", "OPCAO", "CALL", "PUT", "FUTURO", "OPÇÕES", "OPCOES")
+EXCLUDED_TICKERS = {"BOVAW20", "BRHGRUD05M14", "BRRECRD06M15", "BRRECRD07M14", "BBDC1"}
+ALLOWED_ASSET_TYPES = {"ações", "fundos imobiliários", "internacional", "renda fixa", "criptos", "etf", "bdr", "fundos de investimento", "tesouro direto"}
 
 TOOLS = [
- {"name":"portfolio_assets","description":"Lista ativos. Exclui por padrão opções, futuros, estruturados e tickers terminados em 12 ou 13.","inputSchema":{"type":"object","properties":{"include_excluded":{"type":"boolean","default":False},"ticker":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
- {"name":"portfolio_transactions","description":"Consulta movimentações do usuário autenticado. Exclui por padrão snapshots de custódia e instrumentos fora do escopo.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"source":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100},"include_excluded":{"type":"boolean","default":False}}}},
+ {"name":"portfolio_assets","description":"Lista somente ativos dentro do escopo. Exclui sempre opções, futuros, estruturas, instrumentos ambíguos e tickers terminados em 12 ou 13; não há parâmetro para reintroduzir itens excluídos.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
+ {"name":"portfolio_transactions","description":"Consulta movimentações do usuário autenticado. Exclui sempre snapshots de custódia e qualquer instrumento fora do escopo; não há parâmetro para reintroduzir itens excluídos.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"source":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"propose_asset_classification","description":"Prepara uma alteração de classificação sem gravar. Solicite aprovação explícita do usuário.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)}},"required":["ticker","asset_type"]}},
  {"name":"apply_asset_classification","description":"Aplica a classificação somente com approved=true, após aprovação explícita do usuário na conversa.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)},"approved":{"type":"boolean"}},"required":["ticker","asset_type","approved"]}}
 ]
 
 def is_excluded(ticker, asset_type, name):
- t=(ticker or "").upper(); typ=(asset_type or "").casefold(); nm=(name or "").upper()
- return (t.endswith(("12","13")) or re.match(r"^[A-Z]{4}[A-Z]\d{2,3}$", t) is not None or re.match(r"^(WIN|WDO|IND|DOL)[A-Z0-9]*$", t) is not None or any(x in typ for x in EXCLUDED_TYPES) or any(x in nm for x in STRUCTURED_TERMS))
+ t=(ticker or "").strip().upper()
+ typ=(asset_type or "").strip().casefold()
+ nm=(name or "").strip().upper()
+ if t in EXCLUDED_TICKERS or t.endswith(("12", "13")):
+  return True
+ if re.match(r"^(WIN|WDO|IND|DOL)[A-Z0-9]*$", t):
+  return True
+ if re.match(r"^[A-Z]{5}[A-Z]?\d{1,3}$", t):
+  return True
+ if typ not in ALLOWED_ASSET_TYPES:
+  return True
+ if any(x in typ for x in EXCLUDED_TYPES):
+  return True
+ if any(x in nm for x in STRUCTURED_TERMS):
+  return True
+ if typ == "ações" and re.search(r"\b(FIM|FIC|FIRF|FIF|FICFIM)\b", nm):
+  return True
+ return False
 
 def tool_result(data):
  return {"content":[{"type":"text","text":json.dumps(data,ensure_ascii=False,default=str)}]}
@@ -42,7 +60,7 @@ def call_tool(name,args,db,user):
   q=db.query(Asset).order_by(Asset.ticker_current.asc())
   if args.get("ticker"): q=q.filter(Asset.ticker_current==args["ticker"].strip().upper())
   rows=q.limit(500).all()
-  if not args.get("include_excluded",False): rows=[a for a in rows if not is_excluded(a.ticker_current,a.asset_type,a.name)]
+  rows=[a for a in rows if not is_excluded(a.ticker_current,a.asset_type,a.name)]
   return tool_result([{"id":a.id,"ticker":a.ticker_current,"name":a.name,"asset_type":a.asset_type} for a in rows[:limit]])
  if name=="portfolio_transactions":
   q=db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id)
@@ -51,7 +69,7 @@ def call_tool(name,args,db,user):
   rows=q.order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all()
   result=[]
   for tx,a in rows:
-   if not args.get("include_excluded",False) and (tx.source=="spreadsheet_custodia" or is_excluded(a.ticker_current,a.asset_type,a.name)): continue
+   if tx.source=="spreadsheet_custodia" or is_excluded(a.ticker_current,a.asset_type,a.name): continue
    result.append({"id":tx.id,"ticker":a.ticker_current,"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"notes":tx.notes})
    if len(result)>=limit: break
   return tool_result(result)

@@ -12,7 +12,7 @@ Serviço independente para listar workflows e receber propostas de criação/atu
 - Após receber uma confirmação de callback do Telegram, o workflow n8n chama `POST /v1/proposals/{id}/approve` com os cabeçalhos `X-Telegram-Bridge-Token` e `X-Telegram-User-Id`.
 - O Gateway exige o segredo de integração e compara o ID numérico com `TELEGRAM_ALLOWED_USER_ID`.
 - A aprovação é vinculada ao conteúdo validado, possui prazo de validade (1 a 30 minutos; padrão 10), é reivindicada atomicamente e só pode ser usada uma vez.
-- Propostas expiradas, concluídas ou em execução não podem ser aprovadas novamente.
+- Propostas expiradas, concluídas, rejeitadas ou em execução não podem ser decididas novamente. Aprovação e rejeição usam transação SQLite `BEGIN IMMEDIATE`; apenas uma decisão concorrente pode vencer. O ator e o horário da rejeição são persistidos.
 - Em falha/timeout na chamada ao n8n, a proposta não é reexecutada automaticamente. Isso evita duplicidade; uma falha de rede pode deixar o resultado externo indeterminado e exige conferência manual.
 - Auditoria registra ação, recurso, resultado, horário, IP e aprovador; não registra tokens nem payloads.
 
@@ -22,7 +22,7 @@ Serviço independente para listar workflows e receber propostas de criação/atu
 - `GET /v1/workflows`: lista workflows.
 - `POST /v1/proposals`: registra uma proposta de criação ou atualização.
 - `GET /v1/proposals/pending`: lista propostas pendentes para o workflow de aprovação.
-- `POST /v1/proposals/{id}/approve`: aprova e executa uma proposta, apenas pela ponte Telegram autenticada.
+- `POST /v1/proposals/{id}/approve`: aprova e executa uma proposta, apenas pela ponte Telegram autenticada.\n- `POST /v1/proposals/{id}/reject`: rejeita uma proposta sem executar nada; aprovação e rejeição disputam a mesma transição atômica.
 
 ### Exemplo de proposta de criação
 
@@ -57,7 +57,7 @@ O container roda como usuário não-root `10001`. Monte um volume persistente em
 
 ## Integração Telegram/n8n
 
-A ponte Telegram ainda precisa ser configurada no n8n. O workflow deve validar o remetente do callback diretamente no payload recebido do Telegram, permitir somente o ID configurado e só então chamar o endpoint de aprovação. Nunca aceite o ID informado livremente por uma mensagem de texto. Mantenha o Gateway em rede privada e não exponha a rota de aprovação publicamente.
+A ponte Telegram ainda precisa ser configurada no n8n e não faz parte deste serviço Gateway. O workflow deve aceitar somente updates originados do Telegram e, para botões inline, validar o remetente em `callback_query.from.id` (e, se restringir conversas privadas, também `callback_query.message.chat.type`). Para mensagens comuns, validar `message.from.id`. Comparar o ID numérico com `TELEGRAM_ALLOWED_USER_ID` antes de qualquer chamada ao Gateway. Nunca aceitar o ID informado livremente em texto, callback_data ou cabeçalhos enviados pelo usuário; o ID do cabeçalho deve ser montado pelo workflow a partir do update validado.\n\nO fluxo n8n deve: (1) receber o update via Telegram Trigger; (2) validar estrutura, usuário, chat e callback; (3) buscar pendências no Gateway; (4) enviar resumo mínimo da operação com botões Aprovar/Rejeitar contendo apenas o ID opaco da proposta; (5) ao receber callback, validar novamente o remetente no update do callback, conferir se a proposta ainda está pendente e não expirada; (6) chamar a rota `/approve` ou `/reject` com o segredo da ponte guardado em credencial/variável protegida do n8n; (7) responder ao callback e remover/desabilitar os botões para reduzir replay. A validação no callback é obrigatória mesmo que a mensagem original tenha sido enviada ao usuário autorizado. Nunca registrar o token da ponte nem o payload completo da proposta em logs.\n\nMantenha o Gateway em rede privada e não exponha as rotas de aprovação/rejeição publicamente. O endpoint Gateway confia na ponte para afirmar a identidade do remetente; por isso, a segurança depende de o segredo da ponte permanecer exclusivo do n8n e de a ponte validar o payload autêntico do Telegram.
 
 ## Limitações
 

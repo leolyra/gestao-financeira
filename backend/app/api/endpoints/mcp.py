@@ -71,7 +71,10 @@ def call_tool(name,args,db,user):
   return tool_result([{"id":a.id,"ticker":TICKER_ALIASES.get(a.ticker_current,a.ticker_current),"name":("JPMorgan Chase BDR (JPMC34)" if a.ticker_current=="JPMC3" else a.name),"asset_type":("BDR" if a.ticker_current=="JPMC3" else a.asset_type)} for a in rows[:limit]])
  if name=="portfolio_transactions":
   q=db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id)
-  if args.get("ticker"): q=q.filter(Asset.ticker_current==args["ticker"].strip().upper())
+  if args.get("ticker"):
+   requested=args["ticker"].strip().upper()
+   stored=next((k for k,v in TICKER_ALIASES.items() if v==requested),requested)
+   q=q.filter(Asset.ticker_current==stored)
   if args.get("source"): q=q.filter(InvestmentTransaction.source==args["source"])
   rows=q.order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all()
   result=[]

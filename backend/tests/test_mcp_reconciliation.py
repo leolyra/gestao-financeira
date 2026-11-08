@@ -9,7 +9,7 @@ class MCPReconciliationTests(unittest.TestCase):
     def transaction(self, quantity="20000", total_amount="200"):
         return SimpleNamespace(quantity=Decimal(quantity), total_amount=Decimal(total_amount))
 
-    def asset(self, ticker="CDBITAUGEN", name="CDB - ITAU UNIBANCO S.A.", asset_type="Renda Fixa"):
+    def asset(self, ticker="CDB - ITAU UNIBANCO", name="CDB - ITAU UNIBANCO S.A.", asset_type="Renda Fixa"):
         return SimpleNamespace(ticker_current=ticker, name=name, asset_type=asset_type)
 
     def test_jpmc3_alias_is_always_exposed_as_bdr(self):
@@ -41,7 +41,7 @@ class MCPReconciliationTests(unittest.TestCase):
                 self.assertEqual(reasons, [])
 
     def test_generic_itau_cdb_ticker_stays_pending(self):
-        for ticker in ("", "CDB - ITAU UNIBANCO", "CDBITAUGEN"):
+        for ticker in ("", "CDB - ITAU UNIBANCO", "CDB-ITAU UNIBANCO"):
             with self.subTest(ticker=ticker):
                 reasons = reconciliation_reasons(
                     self.transaction("20000", "200"),

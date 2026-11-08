@@ -37,3 +37,14 @@ O cliente MCP deve suportar Streamable HTTP e enviar primeiro `initialize`, depo
 - A implementação inicial só permite alterar `assets.asset_type`; outras mutações devem ganhar ferramentas específicas, validação e auditoria antes de serem liberadas.
 - Não chamar a ferramenta de aplicação sem confirmação humana explícita para aquela alteração.
 - Testar primeiro em homologação e conferir logs da API.
+
+
+## Política de classificação aprovada — PR #12
+- TAEE11 é apresentado como **Ações**.
+- COIN11, HODL11, QBTC11 e QETH11 são apresentados como **Criptos**.
+- IVVB11 é apresentado como **Internacional**.
+- Essas regras são aplicadas na camada MCP; não alteram o cadastro original em `assets`.
+- Exclusões permanentes das consultas normais: BRTRXFD11M10, BRXPMLD14M18, BOVAK20 e BOVAW20. O registro original permanece no banco.
+- CDB Itaú com quantidade 10.000 ou 96.000 não recebe a pendência genérica de CDB.
+- A saída de `portfolio_pending_reconciliation` é estruturada para exportação em planilha: `item_id`, `current_asset_type`, `reconciliation_reasons`, `suggested_action`, `suggested_asset_type`, `user_decision`, `new_asset_type` e `decision_options`. Os campos de decisão iniciam vazios; esta ferramenta não grava decisões nem altera dados.
+- A listagem de pendências é uma fila de revisão, não uma autorização para exclusão ou correção. Toda alteração exige aprovação humana explícita e processo separado.

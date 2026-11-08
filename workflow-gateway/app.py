@@ -8,6 +8,7 @@ import logging
 import os
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from urllib.parse import quote
@@ -53,6 +54,15 @@ def connect_db() -> sqlite3.Connection:
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at)")
     return conn
+
+
+@contextmanager
+def db_session():
+    conn = connect_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def audit(action: str, resource_id: str | None, outcome: str, request: Request, actor: str | None = None) -> None:
@@ -195,7 +205,7 @@ async def create_proposal(body: ProposalCreate, request: Request) -> dict[str, A
     proposal_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=body.ttl_minutes)
-    with connect_db() as conn:
+    with db_session() as conn:
         conn.execute(
             """INSERT INTO proposals
             (id, operation, workflow_id, payload, payload_sha256, status, created_at, expires_at)

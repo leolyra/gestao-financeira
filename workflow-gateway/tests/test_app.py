@@ -45,8 +45,10 @@ class GatewaySecurityTests(unittest.TestCase):
         response = self.client.post("/v1/workflows", json=payload, headers=headers)
         self.assertEqual(response.status_code, 422)
 
-    def test_no_execute_or_delete_routes_exist(self):
+    def test_unsupported_project_and_dangerous_routes_do_not_exist(self):
         headers = {"Authorization": "Bearer test-client-token"}
+        self.assertEqual(self.client.get("/v1/projects", headers=headers).status_code, 404)
+        self.assertEqual(self.client.post("/v1/workflows/123/transfer", headers=headers).status_code, 404)
         self.assertEqual(self.client.post("/v1/workflows/123/execute", headers=headers).status_code, 404)
         self.assertEqual(self.client.delete("/v1/workflows/123", headers=headers).status_code, 405)
 

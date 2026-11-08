@@ -88,6 +88,48 @@ class GatewaySecurityTests(unittest.TestCase):
             self.assertEqual(second.status_code, 409)
             self.assertEqual(mocked.await_count, 1)
 
+    def test_reject_proposal_is_terminal_and_cannot_be_replayed(self):
+        proposal_id = self.create_proposal()
+        response = self.client.post(f"/v1/proposals/{proposal_id}/reject", headers=self.bridge)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "rejected")
+        again = self.client.post(f"/v1/proposals/{proposal_id}/reject", headers=self.bridge)
+        self.assertEqual(again.status_code, 409)
+        approve = self.client.post(f"/v1/proposals/{proposal_id}/approve", headers=self.bridge)
+        self.assertEqual(approve.status_code, 409)
+
+    def test_reject_requires_bridge_authentication(self):
+        proposal_id = self.create_proposal()
+        response = self.client.post(
+            f"/v1/proposals/{proposal_id}/reject",
+            headers={"X-Telegram-User-Id": "157555157"},
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_expired_proposal_cannot_be_rejected(self):
+        proposal_id = self.create_proposal()
+        with gateway.db_session() as conn:
+            conn.execute(
+                "UPDATE proposals SET expires_at=? WHERE id=?",
+                ("2000-01-01T00:00:00+00:00", proposal_id),
+            )
+        response = self.client.post(f"/v1/proposals/{proposal_id}/reject", headers=self.bridge)
+        self.assertEqual(response.status_code, 410)
+        with gateway.db_session() as conn:
+            status = conn.execute("SELECT status FROM proposals WHERE id=?", (proposal_id,)).fetchone()["status"]
+        self.assertEqual(status, "expired")
+
+    def test_approve_and_reject_race_has_single_winner(self):
+        from concurrent.futures import ThreadPoolExecutor
+        proposal_id = self.create_proposal()
+        with patch.object(gateway, "n8n_request", new=AsyncMock(return_value={"id": "created"})):
+            def decide(action):
+                return self.client.post(f"/v1/proposals/{proposal_id}/{action}", headers=self.bridge).status_code
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                statuses = list(pool.map(decide, ["approve", "reject"]))
+        self.assertEqual(sum(status == 200 for status in statuses), 1)
+        self.assertEqual(sum(status in (409, 410) for status in statuses), 1)
+
     def test_direct_write_routes_do_not_exist(self):
         self.assertEqual(self.client.post("/v1/workflows", headers=self.auth).status_code, 405)
         self.assertEqual(self.client.put("/v1/workflows/123", headers=self.auth).status_code, 404)

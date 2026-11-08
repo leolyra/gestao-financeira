@@ -81,10 +81,6 @@ class WorkflowUpdate(BaseModel):
     staticData: dict[str, Any] | None = None
     tags: list[dict[str, Any]] | None = None
 
-class WorkflowTransfer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    destinationProjectId: str = Field(min_length=1, max_length=128)
-
 @app.get("/health")
 async def health() -> dict[str, str]: return {"status": "ok"}
 
@@ -93,9 +89,6 @@ async def list_workflows(limit: int = Query(default=100, ge=1, le=250), cursor: 
     params: dict[str, Any] = {"limit": limit}
     if cursor: params["cursor"] = cursor
     return await n8n_request("GET", "/api/v1/workflows", params=params)
-
-@app.get("/v1/projects", dependencies=[Depends(authenticate)])
-async def list_projects() -> Any: return await n8n_request("GET", "/api/v1/projects")
 
 @app.post("/v1/workflows", dependencies=[Depends(authenticate), Depends(require_write_approval)])
 async def create_workflow(body: WorkflowCreate, request: Request) -> Any:
@@ -111,8 +104,3 @@ async def update_workflow(workflow_id: str, body: WorkflowUpdate, request: Reque
     audit("update_workflow", workflow_id, "accepted", request)
     return result
 
-@app.post("/v1/workflows/{workflow_id}/transfer", dependencies=[Depends(authenticate), Depends(require_write_approval)])
-async def move_workflow(workflow_id: str, body: WorkflowTransfer, request: Request) -> Any:
-    result = await n8n_request("PUT", f"/api/v1/workflows/{quote(workflow_id, safe='')}/transfer", payload={"destinationProjectId": body.destinationProjectId})
-    audit("move_workflow_to_project", workflow_id, "accepted", request)
-    return result

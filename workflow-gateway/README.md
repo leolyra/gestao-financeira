@@ -14,12 +14,10 @@ O cabeçalho de aprovação é uma barreira técnica adicional, não um sistema 
 
 ## Operações
 - GET /v1/workflows: lista workflows (GET /api/v1/workflows).
-- GET /v1/projects: lista projetos (GET /api/v1/projects).
 - POST /v1/workflows: cria workflow.
 - PUT /v1/workflows/{id}: atualiza workflow.
-- POST /v1/workflows/{id}/transfer: move workflow (usa PUT /api/v1/workflows/{id}/transfer).
 
-O endpoint de transferência depende da versão/edição do n8n e precisa ser validado em teste controlado.
+A listagem e a transferência entre projetos foram removidas porque a licença instalada do n8n não inclui `feat:projectRole:admin`. O gateway não tenta contornar essa restrição e não exige licença paga.
 
 ## Variáveis de ambiente
 - N8N_BASE_URL=http://n8n_n8n:5678 (rede interna; confirmar DNS entre serviços).

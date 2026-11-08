@@ -91,7 +91,7 @@ class GatewaySecurityTests(unittest.TestCase):
     def test_direct_write_routes_do_not_exist(self):
         self.assertEqual(self.client.post("/v1/workflows", headers=self.auth).status_code, 405)
         self.assertEqual(self.client.put("/v1/workflows/123", headers=self.auth).status_code, 404)
-        self.assertEqual(self.client.delete("/v1/workflows/123", headers=self.auth).status_code, 405)
+        self.assertEqual(self.client.delete("/v1/workflows/123", headers=self.auth).status_code, 404)
         self.assertEqual(self.client.post("/v1/workflows/123/execute", headers=self.auth).status_code, 404)
 
     def test_unsupported_project_routes_do_not_exist(self):

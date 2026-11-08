@@ -48,10 +48,17 @@ def connect_db() -> sqlite3.Connection:
             expires_at TEXT NOT NULL,
             approved_at TEXT,
             approved_by TEXT,
+            rejected_at TEXT,
+            rejected_by TEXT,
             completed_at TEXT,
             result TEXT
         )
     """)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(proposals)")}
+    if "rejected_at" not in columns:
+        conn.execute("ALTER TABLE proposals ADD COLUMN rejected_at TEXT")
+    if "rejected_by" not in columns:
+        conn.execute("ALTER TABLE proposals ADD COLUMN rejected_by TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status, created_at)")
     return conn
 
@@ -220,7 +227,7 @@ async def create_proposal(body: ProposalCreate, request: Request) -> dict[str, A
 @app.get("/v1/proposals/pending", dependencies=[Depends(authenticate)])
 async def list_pending_proposals() -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
-    with connect_db() as conn:
+    with db_session() as conn:
         conn.execute(
             "UPDATE proposals SET status='expired' WHERE status='pending' AND expires_at <= ?",
             (now,),
@@ -282,3 +289,40 @@ async def approve_proposal(proposal_id: str, request: Request, approver: str = D
         )
     audit(operation, proposal_id, "completed", request, approver)
     return {"proposal_id": proposal_id, "status": "completed", "result": result}
+
+
+@app.post("/v1/proposals/{proposal_id}/reject", dependencies=[Depends(authenticate_telegram_bridge)])
+async def reject_proposal(
+    proposal_id: str,
+    request: Request,
+    approver: str = Depends(authenticate_telegram_bridge),
+) -> dict[str, Any]:
+    # BEGIN IMMEDIATE serializes approve/reject so exactly one decision can win.
+    now = datetime.now(timezone.utc)
+    with db_session() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM proposals WHERE id = ?", (proposal_id,)).fetchone()
+        if row is None:
+            conn.rollback()
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        if row["status"] != "pending":
+            conn.rollback()
+            raise HTTPException(status_code=409, detail="Proposal is no longer pending")
+        if datetime.fromisoformat(row["expires_at"]) <= now:
+            conn.execute(
+                "UPDATE proposals SET status='expired' WHERE id=? AND status='pending'",
+                (proposal_id,),
+            )
+            conn.commit()
+            raise HTTPException(status_code=410, detail="Proposal expired")
+        changed = conn.execute(
+            """UPDATE proposals SET status='rejected', rejected_at=?, rejected_by=?
+            WHERE id=? AND status='pending'""",
+            (now.isoformat(), approver, proposal_id),
+        ).rowcount
+        if changed != 1:
+            conn.rollback()
+            raise HTTPException(status_code=409, detail="Proposal is no longer pending")
+        conn.commit()
+    audit("reject_" + row["operation"], proposal_id, "rejected", request, approver)
+    return {"proposal_id": proposal_id, "status": "rejected"}

@@ -19,11 +19,13 @@ ASSET_CLASSES = {"Ações", "Fundos Imobiliários", "Internacional", "Renda Fixa
 EXCLUDED_TYPES = ("opções", "opcao", "derivativos", "futuros", "estruturados")
 STRUCTURED_TERMS = ("CRA", "CRI", "DEBENTURE", "DEBÊNTURE", "SUBSCR", "RECIBO", "COE", "TERMO", "SWAP", "WARRANT", "OPÇÃO", "OPCAO", "CALL", "PUT", "FUTURO", "OPÇÕES", "OPCOES")
 EXCLUDED_TICKERS = {"BOVAW20", "BRHGRUD05M14", "BRRECRD06M15", "BRRECRD07M14", "BBDC1"}
+TICKER_ALIASES = {"JPMC3": "JPMC34"}
 ALLOWED_ASSET_TYPES = {"ações", "fundos imobiliários", "internacional", "renda fixa", "criptos", "etf", "bdr", "fundos de investimento", "tesouro direto"}
 
 TOOLS = [
  {"name":"portfolio_assets","description":"Lista somente ativos dentro do escopo. Exclui sempre opções, futuros, estruturas, instrumentos ambíguos e tickers terminados em 12 ou 13; não há parâmetro para reintroduzir itens excluídos.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
- {"name":"portfolio_transactions","description":"Consulta movimentações do usuário autenticado. Exclui sempre snapshots de custódia e qualquer instrumento fora do escopo; não há parâmetro para reintroduzir itens excluídos.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"source":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
+ {"name":"portfolio_transactions","description":"Consulta movimentações financeiras válidas do usuário autenticado. Exclui snapshots, valores zerados e instrumentos fora do escopo.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"source":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
+ {"name":"portfolio_pending_reconciliation","description":"Lista separadamente movimentações que exigem conciliação: valor total zerado, ativo sem ticker ou CDB genérico. Não são tratadas como operações financeiras válidas.","inputSchema":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"propose_asset_classification","description":"Prepara uma alteração de classificação sem gravar. Solicite aprovação explícita do usuário.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)}},"required":["ticker","asset_type"]}},
  {"name":"apply_asset_classification","description":"Aplica a classificação somente com approved=true, após aprovação explícita do usuário na conversa.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)},"approved":{"type":"boolean"}},"required":["ticker","asset_type","approved"]}}
 ]
@@ -32,7 +34,7 @@ def is_excluded(ticker, asset_type, name):
  t=(ticker or "").strip().upper()
  typ=(asset_type or "").strip().casefold()
  nm=(name or "").strip().upper()
- if t in EXCLUDED_TICKERS or t.endswith(("12", "13")):
+ if t in EXCLUDED_TICKERS or any(code in nm for code in EXCLUDED_TICKERS) or t.endswith(("12", "13")):
   return True
  if re.match(r"^(WIN|WDO|IND|DOL)[A-Z0-9]*$", t):
   return True
@@ -44,7 +46,9 @@ def is_excluded(ticker, asset_type, name):
   return True
  if any(x in nm for x in STRUCTURED_TERMS):
   return True
- if typ == "ações" and re.search(r"\b(FIM|FIC|FIRF|FIF|FICFIM)\b", nm):
+ if typ == "ações" and (re.search(r"\b(FIM|FIC|FIRF|FIF|FICFIM)\b", nm) or re.fullmatch(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", t)):
+  return True
+ if not t:
   return True
  return False
 
@@ -58,21 +62,38 @@ def call_tool(name,args,db,user):
  limit=max(1,min(int(args.get("limit",100)),200))
  if name=="portfolio_assets":
   q=db.query(Asset).order_by(Asset.ticker_current.asc())
-  if args.get("ticker"): q=q.filter(Asset.ticker_current==args["ticker"].strip().upper())
+  if args.get("ticker"):
+   requested=args["ticker"].strip().upper()
+   stored=next((k for k,v in TICKER_ALIASES.items() if v==requested),requested)
+   q=q.filter(Asset.ticker_current==stored)
   rows=q.limit(500).all()
   rows=[a for a in rows if not is_excluded(a.ticker_current,a.asset_type,a.name)]
-  return tool_result([{"id":a.id,"ticker":a.ticker_current,"name":a.name,"asset_type":a.asset_type} for a in rows[:limit]])
+  return tool_result([{"id":a.id,"ticker":TICKER_ALIASES.get(a.ticker_current,a.ticker_current),"name":("JPMorgan Chase BDR (JPMC34)" if a.ticker_current=="JPMC3" else a.name),"asset_type":("BDR" if a.ticker_current=="JPMC3" else a.asset_type)} for a in rows[:limit]])
  if name=="portfolio_transactions":
   q=db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id)
-  if args.get("ticker"): q=q.filter(Asset.ticker_current==args["ticker"].strip().upper())
+  if args.get("ticker"):
+   requested=args["ticker"].strip().upper()
+   stored=next((k for k,v in TICKER_ALIASES.items() if v==requested),requested)
+   q=q.filter(Asset.ticker_current==stored)
   if args.get("source"): q=q.filter(InvestmentTransaction.source==args["source"])
   rows=q.order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all()
   result=[]
   for tx,a in rows:
-   if tx.source=="spreadsheet_custodia" or is_excluded(a.ticker_current,a.asset_type,a.name): continue
-   result.append({"id":tx.id,"ticker":a.ticker_current,"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"notes":tx.notes})
+   if tx.source=="spreadsheet_custodia" or is_excluded(a.ticker_current,a.asset_type,a.name) or float(tx.total_amount or 0)<=0: continue
+   result.append({"id":tx.id,"ticker":TICKER_ALIASES.get(a.ticker_current,a.ticker_current),"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"notes":tx.notes})
    if len(result)>=limit: break
   return tool_result(result)
+ if name=="portfolio_pending_reconciliation":
+  rows=(db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id).filter(InvestmentTransaction.source!="spreadsheet_custodia").order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all())
+  pending=[]
+  for tx,a in rows:
+   reasons=[]
+   if float(tx.total_amount or 0)<=0: reasons.append("valor_total_zerado")
+   if not (a.ticker_current or "").strip(): reasons.append("ativo_sem_ticker")
+   if "CDB" in (a.name or "").upper(): reasons.append("CDB_generico_sem_identificador")
+   if reasons: pending.append({"id":tx.id,"ticker":a.ticker_current,"asset_name":a.name,"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"reconciliation_reasons":reasons,"notes":tx.notes})
+   if len(pending)>=limit: break
+  return tool_result(pending)
  if name in ("propose_asset_classification","apply_asset_classification"):
   ticker=str(args.get("ticker","")).strip().upper(); new_type=str(args.get("asset_type","")).strip()
   if not ticker or new_type not in ASSET_CLASSES: return tool_error("Ticker ou classificação inválida.")

@@ -68,8 +68,15 @@ def reconciliation_reasons(tx, asset):
   reasons.append("valor_total_zerado")
  if not (asset.ticker_current or "").strip():
   reasons.append("ativo_sem_ticker")
- is_known_itau_cdb=("CDB" in (asset.name or "").upper() and "ITAU" in (asset.name or "").upper() and float(tx.quantity or 0) in (10000.0,96000.0))
- if "CDB" in (asset.name or "").upper() and not is_known_itau_cdb:
+ asset_name=(asset.name or "").strip().upper()
+ ticker=(asset.ticker_current or "").strip().upper()
+ is_itau_cdb="CDB" in asset_name and "ITAU" in asset_name
+ # Itaú CDBs with an individual ticker are valid regardless of quantity or
+ # the Pluggy unit-price representation (which can legitimately be R$ 0.01).
+ generic_tickers={"", "CDB - ITAU UNIBANCO", "CDB-ITAU UNIBANCO"}
+ has_individual_ticker=bool(ticker) and ticker not in generic_tickers and not ticker.startswith("CDB - ITAU")
+ is_known_itau_cdb=is_itau_cdb and has_individual_ticker
+ if "CDB" in asset_name and not is_known_itau_cdb:
   reasons.append("CDB_generico_sem_identificador")
  return reasons
 
@@ -113,7 +120,9 @@ def call_tool(name,args,db,user):
    if len(result)>=limit: break
   return tool_result(result)
  if name=="portfolio_pending_reconciliation":
-  rows=(db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id).filter(InvestmentTransaction.source!="spreadsheet_custodia").order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all())
+  # Stream the complete ordered result set. Applying LIMIT before checking
+  # reconciliation reasons can hide older pending items behind valid rows.
+  rows=(db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id).filter(InvestmentTransaction.source!="spreadsheet_custodia").order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).yield_per(250))
   pending=[]
   for tx,a in rows:
    reasons=reconciliation_reasons(tx,a)

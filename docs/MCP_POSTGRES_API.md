@@ -45,21 +45,21 @@ O cliente MCP deve suportar Streamable HTTP e enviar primeiro `initialize`, depo
 - IVVB11 é apresentado como **Internacional**.
 - Essas regras são aplicadas na camada MCP; não alteram o cadastro original em `assets`.
 - Exclusões permanentes das consultas normais: BRTRXFD11M10, BRXPMLD14M18, BOVAK20 e BOVAW20. O registro original permanece no banco.
-- CDB Itaú com quantidade 10.000 ou 96.000 não recebe a pendência genérica de CDB.
+- Regra histórica de quantidade para CDB Itaú (10.000 ou 96.000), substituída pela identificação individual por ticker na PR #14.
 - A saída de `portfolio_pending_reconciliation` é estruturada para exportação em planilha: `item_id`, `current_asset_type`, `reconciliation_reasons`, `suggested_action`, `suggested_asset_type`, `user_decision`, `new_asset_type` e `decision_options`. Os campos de decisão iniciam vazios; esta ferramenta não grava decisões nem altera dados.
 - A listagem de pendências é uma fila de revisão, não uma autorização para exclusão ou correção. Toda alteração exige aprovação humana explícita e processo separado.
 
 
 ## Correções de consistência — PR #13
 - A classificação **BDR** de JPMC34 é aplicada de forma uniforme em `portfolio_assets`, `portfolio_transactions` e na fila de conciliação.
-- `portfolio_transactions` usa a mesma regra de conciliação de `portfolio_pending_reconciliation`: movimentações com valor zerado, ativo sem ticker ou CDB Itaú genérico fora das exceções aprovadas não aparecem como operações válidas.
-- Permanecem válidas as exceções de CDB Itaú com quantidade exatamente 10.000 ou 96.000, desde que não exista outro motivo de conciliação.
+- `portfolio_transactions` usa a mesma regra de conciliação de `portfolio_pending_reconciliation`: movimentações com valor zerado, ativo sem ticker ou CDB Itaú genérico não aparecem como operações válidas.
+- A PR #14 substituiu as exceções baseadas apenas em quantidade: CDB Itaú genérico permanece pendente mesmo com quantidade 10.000 ou 96.000; ticker individualizado é o critério de identificação.
 - A regra de conciliação foi centralizada em uma função para evitar divergência entre as ferramentas e coberta por testes unitários.
 - Nenhuma dessas regras altera registros financeiros, classificações persistidas ou dados Pluggy.
 
 
 ## Ajustes de conciliação — PR #14
-- CDB Itaú com ticker individualizado é considerado identificado e não recebe a pendência genérica, independentemente da quantidade e do preço unitário (inclusive R$ 0,01).
+- CDB Itaú com ticker individualizado é considerado identificado e não recebe a pendência genérica, independentemente da quantidade e do preço unitário (inclusive R$ 0,01). CDB genérico sem ticker individualizado continua pendente, inclusive nas quantidades históricas de 10.000 e 96.000.
 - CDB Itaú sem ticker individualizado permanece na fila de conciliação. Valor total zerado e outras razões independentes continuam gerando pendência.
 - A consulta de pendências percorre o conjunto ordenado completo em lotes (`yield_per`) e aplica o limite à quantidade de pendências encontradas, não às primeiras 1.000 movimentações brutas. Isso evita ocultar pendências antigas atrás de movimentações válidas.
 - A ferramenta continua somente leitura; nenhuma alteração financeira ou sincronização Pluggy é executada.

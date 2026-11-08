@@ -12,7 +12,10 @@
 
 ## Ferramentas
 - `portfolio_assets`: lista ativos.
-- `portfolio_transactions`: movimentações do usuário autenticado.
+- `portfolio_transactions`: movimentações financeiras válidas do usuário autenticado; exclui valores totais zerados.
+- `portfolio_pending_reconciliation`: lista separadamente movimentações com valor zerado, ativo sem ticker ou CDB genérico, para conciliação.
+- O ativo armazenado como `JPMC3` é apresentado ao assistente como `JPMC34` (BDR internacional), sem alterar o cadastro original.
+- Exclusões por código também verificam o nome do ativo; portanto, `BOVAW20` no nome de `BOVA11` faz o registro ser excluído por ser opção.
 - `propose_asset_classification`: simula alteração sem gravar.
 - `apply_asset_classification`: grava alteração após aprovação explícita.
 

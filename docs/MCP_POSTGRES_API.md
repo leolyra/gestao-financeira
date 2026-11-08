@@ -14,7 +14,7 @@
 - `portfolio_assets`: lista ativos.
 - `portfolio_transactions`: movimentações financeiras válidas do usuário autenticado; exclui valores totais zerados.
 - `portfolio_pending_reconciliation`: lista separadamente movimentações com valor zerado, ativo sem ticker ou CDB genérico, para conciliação.
-- O ativo armazenado como `JPMC3` é apresentado ao assistente como `JPMC34` (BDR internacional), sem alterar o cadastro original.
+- Os ativos armazenados como `JPMC3` e `JPMC34` são apresentados ao assistente como `JPMC34` (classificação **BDR**), sem alterar o cadastro original.
 - Exclusões por código também verificam o nome do ativo; portanto, `BOVAW20` no nome de `BOVA11` faz o registro ser excluído por ser opção.
 - `propose_asset_classification`: simula alteração sem gravar.
 - `apply_asset_classification`: grava alteração após aprovação explícita.
@@ -48,3 +48,11 @@ O cliente MCP deve suportar Streamable HTTP e enviar primeiro `initialize`, depo
 - CDB Itaú com quantidade 10.000 ou 96.000 não recebe a pendência genérica de CDB.
 - A saída de `portfolio_pending_reconciliation` é estruturada para exportação em planilha: `item_id`, `current_asset_type`, `reconciliation_reasons`, `suggested_action`, `suggested_asset_type`, `user_decision`, `new_asset_type` e `decision_options`. Os campos de decisão iniciam vazios; esta ferramenta não grava decisões nem altera dados.
 - A listagem de pendências é uma fila de revisão, não uma autorização para exclusão ou correção. Toda alteração exige aprovação humana explícita e processo separado.
+
+
+## Correções de consistência — PR #13
+- A classificação **BDR** de JPMC34 é aplicada de forma uniforme em `portfolio_assets`, `portfolio_transactions` e na fila de conciliação.
+- `portfolio_transactions` usa a mesma regra de conciliação de `portfolio_pending_reconciliation`: movimentações com valor zerado, ativo sem ticker ou CDB Itaú genérico fora das exceções aprovadas não aparecem como operações válidas.
+- Permanecem válidas as exceções de CDB Itaú com quantidade exatamente 10.000 ou 96.000, desde que não exista outro motivo de conciliação.
+- A regra de conciliação foi centralizada em uma função para evitar divergência entre as ferramentas e coberta por testes unitários.
+- Nenhuma dessas regras altera registros financeiros, classificações persistidas ou dados Pluggy.

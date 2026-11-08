@@ -19,7 +19,7 @@ ASSET_CLASSES = {"Ações", "Fundos Imobiliários", "Internacional", "Renda Fixa
 EXCLUDED_TYPES = ("opções", "opcao", "derivativos", "futuros", "estruturados")
 STRUCTURED_TERMS = ("CRA", "CRI", "DEBENTURE", "DEBÊNTURE", "SUBSCR", "RECIBO", "COE", "TERMO", "SWAP", "WARRANT", "OPÇÃO", "OPCAO", "CALL", "PUT", "FUTURO", "OPÇÕES", "OPCOES")
 EXCLUDED_TICKERS = {"BOVAK20", "BOVAW20", "BRTRXFD11M10", "BRXPMLD14M18", "BRHGRUD05M14", "BRRECRD06M15", "BRRECRD07M14", "BBDC1"}
-ASSET_TYPE_OVERRIDES = {"TAEE11": "Ações", "COIN11": "Criptos", "HODL11": "Criptos", "QBTC11": "Criptos", "QETH11": "Criptos", "IVVB11": "Internacional"}
+ASSET_TYPE_OVERRIDES = {"TAEE11": "Ações", "COIN11": "Criptos", "HODL11": "Criptos", "QBTC11": "Criptos", "QETH11": "Criptos", "IVVB11": "Internacional", "JPMC34": "BDR"}
 TICKER_ALIASES = {"JPMC3": "JPMC34"}
 ALLOWED_ASSET_TYPES = {"ações", "fundos imobiliários", "internacional", "renda fixa", "criptos", "etf", "bdr", "fundos de investimento", "tesouro direto"}
 
@@ -52,6 +52,26 @@ def is_excluded(ticker, asset_type, name):
  if not t:
   return True
  return False
+
+def effective_asset_type(ticker, stored_asset_type):
+ canonical_ticker=TICKER_ALIASES.get((ticker or "").strip().upper(),(ticker or "").strip().upper())
+ if canonical_ticker in ASSET_TYPE_OVERRIDES:
+  return ASSET_TYPE_OVERRIDES[canonical_ticker]
+ if (ticker or "").strip().upper() in TICKER_ALIASES:
+  return "BDR"
+ return stored_asset_type
+
+
+def reconciliation_reasons(tx, asset):
+ reasons=[]
+ if float(tx.total_amount or 0)<=0:
+  reasons.append("valor_total_zerado")
+ if not (asset.ticker_current or "").strip():
+  reasons.append("ativo_sem_ticker")
+ is_known_itau_cdb=("CDB" in (asset.name or "").upper() and "ITAU" in (asset.name or "").upper() and float(tx.quantity or 0) in (10000.0,96000.0))
+ if "CDB" in (asset.name or "").upper() and not is_known_itau_cdb:
+  reasons.append("CDB_generico_sem_identificador")
+ return reasons
 
 def tool_result(data):
  return {"content":[{"type":"text","text":json.dumps(data,ensure_ascii=False,default=str)}]}
@@ -88,20 +108,16 @@ def call_tool(name,args,db,user):
   rows=q.order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all()
   result=[]
   for tx,a in rows:
-   if tx.source=="spreadsheet_custodia" or is_excluded(a.ticker_current,a.asset_type,a.name) or float(tx.total_amount or 0)<=0: continue
-   result.append({"id":tx.id,"ticker":TICKER_ALIASES.get(a.ticker_current,a.ticker_current),"asset_type":ASSET_TYPE_OVERRIDES.get(TICKER_ALIASES.get(a.ticker_current,a.ticker_current),a.asset_type),"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"notes":tx.notes})
+   if tx.source=="spreadsheet_custodia" or is_excluded(a.ticker_current,a.asset_type,a.name) or reconciliation_reasons(tx,a): continue
+   result.append({"id":tx.id,"ticker":TICKER_ALIASES.get(a.ticker_current,a.ticker_current),"asset_type":effective_asset_type(a.ticker_current,a.asset_type),"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"notes":tx.notes})
    if len(result)>=limit: break
   return tool_result(result)
  if name=="portfolio_pending_reconciliation":
   rows=(db.query(InvestmentTransaction,Asset).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id).filter(InvestmentTransaction.source!="spreadsheet_custodia").order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(1000).all())
   pending=[]
   for tx,a in rows:
-   reasons=[]
-   if float(tx.total_amount or 0)<=0: reasons.append("valor_total_zerado")
-   if not (a.ticker_current or "").strip(): reasons.append("ativo_sem_ticker")
-   is_known_itau_cdb=("CDB" in (a.name or "").upper() and "ITAU" in (a.name or "").upper() and float(tx.quantity or 0) in (10000.0,96000.0))
-   if "CDB" in (a.name or "").upper() and not is_known_itau_cdb: reasons.append("CDB_generico_sem_identificador")
-   if reasons: pending.append({"item_id":f"transaction:{tx.id}","id":tx.id,"ticker":a.ticker_current,"asset_name":a.name,"current_asset_type":a.asset_type,"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"reconciliation_reasons":reasons,"suggested_action":"REVISAR","suggested_asset_type":ASSET_TYPE_OVERRIDES.get((a.ticker_current or "").upper()),"user_decision":None,"new_asset_type":None,"decision_options":["manter","excluir","corrigir"],"notes":tx.notes})
+   reasons=reconciliation_reasons(tx,a)
+   if reasons: pending.append({"item_id":f"transaction:{tx.id}","id":tx.id,"ticker":a.ticker_current,"asset_name":a.name,"current_asset_type":a.asset_type,"operation_type":tx.operation_type,"quantity":tx.quantity,"unit_price":tx.unit_price,"total_amount":tx.total_amount,"trade_date":tx.trade_date,"source":tx.source,"reconciliation_reasons":reasons,"suggested_action":"REVISAR","suggested_asset_type":effective_asset_type(a.ticker_current,a.asset_type),"user_decision":None,"new_asset_type":None,"decision_options":["manter","excluir","corrigir"],"notes":tx.notes})
    if len(pending)>=limit: break
   return tool_result(pending)
  if name in ("propose_asset_classification","apply_asset_classification"):

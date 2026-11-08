@@ -29,6 +29,26 @@ class MCPReconciliationTests(unittest.TestCase):
                 self.assertNotIn("CDB_generico_sem_identificador", reasons)
                 self.assertEqual(reasons, [])
 
+
+    def test_individual_itau_cdb_ticker_is_valid_for_any_quantity_at_one_cent(self):
+        for ticker, quantity in (("CDBA261THOI", "96000"), ("CDB3250492C", "123099"), ("CDB7261U8FW", "40000")):
+            with self.subTest(ticker=ticker):
+                reasons = reconciliation_reasons(
+                    self.transaction(quantity, "100"),
+                    self.asset(ticker=ticker),
+                )
+                self.assertNotIn("CDB_generico_sem_identificador", reasons)
+                self.assertEqual(reasons, [])
+
+    def test_generic_itau_cdb_ticker_stays_pending(self):
+        for ticker in ("", "CDB - ITAU UNIBANCO", "CDBITAUGEN"):
+            with self.subTest(ticker=ticker):
+                reasons = reconciliation_reasons(
+                    self.transaction("20000", "200"),
+                    self.asset(ticker=ticker),
+                )
+                self.assertIn("CDB_generico_sem_identificador", reasons)
+
     def test_zero_value_remains_pending(self):
         reasons = reconciliation_reasons(self.transaction("1", "0"), self.asset("CDB123", "CDB Itaú"))
         self.assertIn("valor_total_zerado", reasons)

@@ -6,7 +6,9 @@
 - Sem SQL arbitrário. Consultas e mutações são ferramentas tipadas e allowlisted.
 - Escrita exige aprovação explícita na conversa e chamada da ferramenta com `approved=true`.
 - Auditoria de mudanças de classificação em `mcp_audit_logs`.
-- Escopo padrão exclui opções, futuros, estruturados, tickers terminados em 12/13 e snapshots `spreadsheet_custodia`.
+- Política restritiva: opções, futuros, estruturas, instrumentos ambíguos e classificações desconhecidas são sempre excluídos; não existe parâmetro para reintroduzi-los nas consultas.
+- Exclui tickers terminados em 12/13 e os códigos identificados `BOVAW20`, `BRHGRUD05M14`, `BRRECRD06M15`, `BRRECRD07M14` e `BBDC1`.
+- Exclui snapshots `spreadsheet_custodia`; os registros originais permanecem intactos.
 
 ## Ferramentas
 - `portfolio_assets`: lista ativos.

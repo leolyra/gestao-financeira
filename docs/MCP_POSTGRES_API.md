@@ -56,3 +56,10 @@ O cliente MCP deve suportar Streamable HTTP e enviar primeiro `initialize`, depo
 - Permanecem válidas as exceções de CDB Itaú com quantidade exatamente 10.000 ou 96.000, desde que não exista outro motivo de conciliação.
 - A regra de conciliação foi centralizada em uma função para evitar divergência entre as ferramentas e coberta por testes unitários.
 - Nenhuma dessas regras altera registros financeiros, classificações persistidas ou dados Pluggy.
+
+
+## Ajustes de conciliação — PR #14
+- CDB Itaú com ticker individualizado é considerado identificado e não recebe a pendência genérica, independentemente da quantidade e do preço unitário (inclusive R$ 0,01).
+- CDB Itaú sem ticker individualizado permanece na fila de conciliação. Valor total zerado e outras razões independentes continuam gerando pendência.
+- A consulta de pendências percorre o conjunto ordenado completo em lotes (`yield_per`) e aplica o limite à quantidade de pendências encontradas, não às primeiras 1.000 movimentações brutas. Isso evita ocultar pendências antigas atrás de movimentações válidas.
+- A ferramenta continua somente leitura; nenhuma alteração financeira ou sincronização Pluggy é executada.

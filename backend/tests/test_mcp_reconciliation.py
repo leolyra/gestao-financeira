@@ -22,13 +22,11 @@ class MCPReconciliationTests(unittest.TestCase):
         reasons = reconciliation_reasons(self.transaction("20000", "200"), self.asset())
         self.assertIn("CDB_generico_sem_identificador", reasons)
 
-    def test_approved_itau_cdb_quantities_are_not_generic_pending(self):
+    def test_generic_itau_cdb_quantities_remain_pending_without_individual_ticker(self):
         for quantity in ("10000", "96000"):
             with self.subTest(quantity=quantity):
                 reasons = reconciliation_reasons(self.transaction(quantity, "100"), self.asset())
-                self.assertNotIn("CDB_generico_sem_identificador", reasons)
-                self.assertEqual(reasons, [])
-
+                self.assertIn("CDB_generico_sem_identificador", reasons)
 
     def test_individual_itau_cdb_ticker_is_valid_for_any_quantity_at_one_cent(self):
         for ticker, quantity in (("CDBA261THOI", "96000"), ("CDB3250492C", "123099"), ("CDB7261U8FW", "40000")):

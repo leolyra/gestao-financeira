@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
     PLUGGY_CLIENT_ID: str = ""
     PLUGGY_CLIENT_SECRET: str = ""
+    # MCP write tools stay unavailable unless an operator explicitly opts in.
+    MCP_ENABLE_WRITES: bool = False
 
     class Config:
         case_sensitive = True

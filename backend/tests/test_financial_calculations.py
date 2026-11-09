@@ -33,4 +33,46 @@ class PortfolioMathTests(unittest.TestCase):
              self.op(2,"sell","2","300","0","2026-10-01")]
         self.assertEqual(calculate_realized_gain(ops,datetime(2026,11,1)),Decimal("0.00"))
 
+
+from app.api.endpoints.open_finance import classify_pluggy_investment_transaction
+
+
+class PluggyInvestmentIncomeClassificationTests(unittest.TestCase):
+    def test_explicit_dividend_type(self):
+        self.assertEqual(
+            classify_pluggy_investment_transaction("DIVIDEND", "Pagamento"),
+            "dividend",
+        )
+
+    def test_explicit_jcp_description(self):
+        self.assertEqual(
+            classify_pluggy_investment_transaction("INTEREST", "JCP PETR4"),
+            "jcp",
+        )
+
+    def test_generic_interest_is_not_assumed_to_be_jcp(self):
+        self.assertEqual(
+            classify_pluggy_investment_transaction("INTEREST", "Pagamento de juros"),
+            "interest",
+        )
+
+    def test_treasury_coupon_is_not_investment_income(self):
+        self.assertEqual(
+            classify_pluggy_investment_transaction("INTEREST", "Cupom Tesouro IPCA+"),
+            "interest",
+        )
+
+    def test_fii_yield(self):
+        self.assertEqual(
+            classify_pluggy_investment_transaction("YIELD", "Pagamento"),
+            "rendimento",
+        )
+
+    def test_amortization_is_not_income(self):
+        self.assertEqual(
+            classify_pluggy_investment_transaction("AMORTIZATION", "Amortização"),
+            "amortization",
+        )
+
+
 if __name__ == "__main__": unittest.main()

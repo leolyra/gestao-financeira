@@ -37,6 +37,58 @@ async def get_connect_token(current_user: User = Depends(get_current_user)):
             detail=f"Falha na autenticação da Pluggy: {str(e)}"
         )
 
+def classify_pluggy_investment_transaction(raw_type: str, description: str) -> str:
+    """Classifica eventos de investimento sem presumir que todo INTEREST seja JCP."""
+    tx_type = (raw_type or "").strip().upper()
+    desc = (description or "").strip().upper()
+
+    if tx_type in ("DIVIDEND", "DIVIDENDO") or any(
+        term in desc for term in ("DIVIDENDO", "DIVIDEND", "PROVENTO")
+    ):
+        return "dividend"
+    if tx_type in ("JCP", "JUROS SOBRE CAPITAL") or any(
+        term in desc for term in ("JCP", "JUROS SOBRE CAPITAL", "JUROS S/ CAPITAL")
+    ):
+        return "jcp"
+    if tx_type in ("YIELD", "RENDIMENTO", "EARNINGS") or any(
+        term in desc for term in ("RENDIMENTO", "REND FII")
+    ):
+        return "rendimento"
+    if tx_type in ("INTEREST", "INTEREST_PAYMENT") or any(
+        term in desc for term in ("CUPOM", "JUROS TESOURO", "JUROS DE TESOURO")
+    ):
+        # INTEREST é genérico: sem evidência suficiente, não o contabilizar como JCP.
+        return "interest"
+    if tx_type in ("AMORTIZATION", "AMORTIZACAO") or "AMORT" in desc:
+        return "amortization"
+    if tx_type in ("SELL", "VENDA") or any(
+        term in desc for term in ("VEND", "RESGATE")
+    ):
+        return "sell"
+    return "buy"
+
+
+def has_matching_bank_income(
+    db: Session,
+    user_id: int,
+    asset_id: int,
+    trade_date: datetime,
+    amount: Decimal,
+) -> bool:
+    """Evita importar novamente como provento o mesmo crédito já capturado no extrato."""
+    if amount <= 0:
+        return False
+    return db.query(InvestmentTransaction.id).filter(
+        InvestmentTransaction.user_id == user_id,
+        InvestmentTransaction.asset_id == asset_id,
+        func.date(InvestmentTransaction.trade_date) == trade_date.date(),
+        InvestmentTransaction.total_amount == amount,
+        InvestmentTransaction.operation_type.in_(("dividend", "jcp", "rendimento")),
+        InvestmentTransaction.source == "open_finance",
+        InvestmentTransaction.notes.ilike("%PluggyBankTx:%"),
+    ).first() is not None
+
+
 def _save_transaction(p_tx: dict, account_id: int, is_credit_card: bool, user_id: int, db: Session) -> bool:
     tx_id = p_tx.get("id")
     if not tx_id:
@@ -267,31 +319,30 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                     ).first()
                     if not already:
                         itx_type = str(itx.get("type") or "").upper()
-                        desc_text = str(itx.get("description") or "").upper()
-
-                        # Classificação rigorosa de proventos e operações de bolsa
-                        if itx_type in ["DIVIDEND", "DIVIDENDO"] or "DIVID" in desc_text:
-                            op_type = "dividend"
-                        elif itx_type in ["INTEREST", "JCP"] or "JCP" in desc_text or "JUROS" in desc_text:
-                            op_type = "jcp"
-                        elif itx_type in ["YIELD", "RENDIMENTO", "EARNINGS"] or "REND" in desc_text:
-                            op_type = "rendimento"
-                        elif itx_type in ["AMORTIZATION", "AMORTIZACAO"] or "AMORT" in desc_text:
-                            op_type = "amortization"
-                        elif itx_type in ["SELL", "VENDA"] or "VEND" in desc_text or "RESGATE" in desc_text:
-                            op_type = "sell"
-                        else:
-                            op_type = "buy"
+                        desc_text = str(itx.get("description") or "")
+                        op_type = classify_pluggy_investment_transaction(itx_type, desc_text)
 
                         itx_qty = Decimal(str(itx.get("quantity") or 0))
                         itx_val = Decimal(str(itx.get("value") or 0))
                         itx_amt = Decimal(str(itx.get("amount") or 0))
-                        if itx_amt == 0 and itx_qty > 0 and itx_val > 0:
-                            itx_amt = (itx_qty * itx_val)
-                        elif itx_amt > 0 and itx_qty > 0 and itx_val == 0:
-                            itx_val = (itx_amt / itx_qty).quantize(Decimal("0.0001"))
-                        elif itx_amt == 0 and itx_val > 0:
-                            itx_amt = itx_val
+
+                        # Para proventos, amount é o valor total do evento. Não
+                        # multiplicar quantidade por preço unitário: isso pode
+                        # transformar cotas/ações em valores fictícios de renda.
+                        is_income = op_type in ("dividend", "jcp", "rendimento")
+                        if is_income and itx_amt <= 0:
+                            print(
+                                f"[OPEN_FINANCE] Provento ignorado por amount ausente/zero "
+                                f"(investment transaction {itx_id})."
+                            )
+                            continue
+                        if not is_income:
+                            if itx_amt == 0 and itx_qty > 0 and itx_val > 0:
+                                itx_amt = (itx_qty * itx_val)
+                            elif itx_amt > 0 and itx_qty > 0 and itx_val == 0:
+                                itx_val = (itx_amt / itx_qty).quantize(Decimal("0.0001"))
+                            elif itx_amt == 0 and itx_val > 0:
+                                itx_amt = itx_val
 
                         itx_d = local_now_naive()
                         itx_raw_d = itx.get("tradeDate") or itx.get("date")
@@ -300,6 +351,15 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                                 itx_d = to_local_naive(datetime.fromisoformat(itx_raw_d.replace("Z", "+00:00")))
                             except Exception:
                                 pass
+
+                        if is_income and has_matching_bank_income(
+                            db, current_user_id, asset.id, itx_d, abs(itx_amt)
+                        ):
+                            print(
+                                f"[OPEN_FINANCE] Provento {itx_id} já capturado no extrato; "
+                                "registro de investimento duplicado ignorado."
+                            )
+                            continue
 
                         sub_tx = InvestmentTransaction(
                             user_id=current_user_id,

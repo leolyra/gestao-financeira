@@ -1,5 +1,7 @@
 import httpx
 import time
+import random
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from app.core.config import settings
@@ -10,6 +12,10 @@ class PluggyService:
     def __init__(self):
         self._api_key: Optional[str] = None
         self._api_key_obtained_at: float = 0.0
+        self._request_lock = asyncio.Lock()
+        self._last_request_at = 0.0
+        self._minimum_request_interval = 0.25
+        self._max_rate_limit_retries = 5
 
     def get_credentials(self) -> tuple[str, str]:
         import os
@@ -52,25 +58,54 @@ class PluggyService:
             self._api_key_obtained_at = time.time()
             return self._api_key
 
-    async def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None, json_data: Optional[Dict[str, Any]] = None) -> httpx.Response:
-        api_key = await self.get_api_key()
-        url = f"{BASE_URL}{path}"
-        headers = {
-            "X-API-KEY": api_key,
-            "accept": "application/json"
-        }
+    def _retry_after_seconds(self, response: httpx.Response) -> Optional[float]:
+        value = response.headers.get("Retry-After")
+        if not value:
+            return None
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            try:
+                retry_at = parsedate_to_datetime(value)
+                return max(0.0, (retry_at - datetime.now(retry_at.tzinfo)).total_seconds())
+            except Exception:
+                return None
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            res = await client.request(method, url, headers=headers, params=params, json=json_data)
-            
-            if res.status_code in (401, 403):
-                print(f"[PLUGGY] Status {res.status_code} na rota {path}. Renovando chave e tentando novamente...")
-                self._api_key = None
-                new_key = await self.get_api_key(force_refresh=True)
-                headers["X-API-KEY"] = new_key
-                res = await client.request(method, url, headers=headers, params=params, json=json_data)
-            
-            return res
+    async def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None, json_data: Optional[Dict[str, Any]] = None) -> httpx.Response:
+        url = f"{BASE_URL}{path}"
+        async with self._request_lock:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                for attempt in range(self._max_rate_limit_retries + 1):
+                    wait_for_spacing = self._minimum_request_interval - (time.monotonic() - self._last_request_at)
+                    if wait_for_spacing > 0:
+                        await asyncio.sleep(wait_for_spacing)
+
+                    api_key = await self.get_api_key()
+                    headers = {"X-API-KEY": api_key, "accept": "application/json"}
+                    response = await client.request(method, url, headers=headers, params=params, json=json_data)
+                    self._last_request_at = time.monotonic()
+
+                    if response.status_code in (401, 403):
+                        print(f"[PLUGGY] Status {response.status_code} na rota {path}. Renovando chave e tentando novamente...")
+                        self._api_key = None
+                        headers["X-API-KEY"] = await self.get_api_key(force_refresh=True)
+                        response = await client.request(method, url, headers=headers, params=params, json=json_data)
+                        self._last_request_at = time.monotonic()
+
+                    if response.status_code != 429:
+                        return response
+
+                    if attempt >= self._max_rate_limit_retries:
+                        print(f"[PLUGGY] Limite de tentativas 429 atingido na rota {path}.")
+                        return response
+
+                    retry_after = self._retry_after_seconds(response)
+                    backoff = min(30.0, 2 ** attempt) + random.uniform(0.0, 0.5)
+                    delay = min(120.0, retry_after) if retry_after is not None else backoff
+                    print(f"[PLUGGY] HTTP 429 em {path}; aguardando {delay:.1f}s antes da tentativa {attempt + 2}/{self._max_rate_limit_retries + 1}.")
+                    await asyncio.sleep(delay)
+
+                raise RuntimeError("Fluxo inesperado de retentativa Pluggy.")
 
     async def create_connect_token(self, client_user_id: Optional[str] = None) -> str:
         payload = {"options": {"clientUserId": str(client_user_id), "avoidDuplicates": True}} if client_user_id else {}
@@ -130,8 +165,7 @@ class PluggyService:
         for page in range(1, 101):
             response = await self._request("GET", path, params={**params, "page": page, "pageSize": 500})
             if response.status_code != 200:
-                if page == 1: raise Exception(f"Pluggy {path} retornou {response.status_code}: {response.text}")
-                break
+                raise Exception(f"Pluggy {path} retornou {response.status_code}: {response.text}. Paginação interrompida; resultados parciais não serão tratados como completos.")
             payload=response.json(); rows=payload.get("results",[])
             if not rows: break
             previous_count=len(collected)
@@ -191,15 +225,9 @@ class PluggyService:
         return await self._get_cursor_pages("/v2/transactions", params)
 
     async def get_investments(self, item_id: str) -> List[Dict[str, Any]]:
-        try: return await self._get_all_pages("/investments", {"itemId": item_id})
-        except Exception as exc:
-            print(f"[PLUGGY] Falha ao paginar investimentos: {exc}")
-            return []
+        return await self._get_all_pages("/investments", {"itemId": item_id})
 
     async def get_investment_transactions(self, investment_id: str) -> List[Dict[str, Any]]:
-        try: return await self._get_all_pages(f"/investments/{investment_id}/transactions", {})
-        except Exception as exc:
-            print(f"[PLUGGY] Falha ao paginar operações do investimento: {exc}")
-            return []
+        return await self._get_all_pages(f"/investments/{investment_id}/transactions", {})
 
 pluggy_service = PluggyService()

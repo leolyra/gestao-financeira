@@ -11,6 +11,12 @@ class MCPReadOnlyModeTests(unittest.TestCase):
         self.assertNotIn("apply_asset_classification", names)
         self.assertIn("portfolio_assets", names)
         self.assertIn("portfolio_transactions", names)
+        self.assertIn("financial_accounts", names)
+        self.assertIn("financial_cash_flow", names)
+        self.assertIn("financial_expenses_by_category", names)
+        self.assertIn("investment_positions", names)
+        self.assertIn("investment_income", names)
+        self.assertFalse(names.intersection({"apply_asset_classification"}))
 
     def test_write_tool_is_rejected_even_if_called_directly(self):
         with patch("app.api.endpoints.mcp.settings.MCP_ENABLE_WRITES", False):

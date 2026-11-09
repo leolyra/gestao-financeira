@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.entities import Asset, InvestmentTransaction, User, MCPAuditLog
+from app.models.entities import (Asset, InvestmentTransaction, User, MCPAuditLog, Account, Transaction, Category, AssetQuote)
 
 logger = logging.getLogger("finance_api.mcp")
 router = APIRouter(tags=["mcp"])
@@ -27,6 +27,12 @@ ALLOWED_ASSET_TYPES = {"ações", "fundos imobiliários", "internacional", "rend
 WRITE_TOOL_NAMES = {"apply_asset_classification"}
 
 TOOLS = [
+
+ {"name":"financial_accounts","description":"Lista contas bancárias e cartões do usuário autenticado com os saldos atuais informados pela instituição ou pelos lançamentos manuais. Somente leitura.","inputSchema":{"type":"object","properties":{}}},
+ {"name":"financial_cash_flow","description":"Resume receitas e despesas contabilizadas por mês, usando valores positivos como receitas e negativos como despesas. Datas opcionais no formato YYYY-MM-DD.","inputSchema":{"type":"object","properties":{"start_date":{"type":"string","description":"Data inicial inclusiva YYYY-MM-DD"},"end_date":{"type":"string","description":"Data final inclusiva YYYY-MM-DD"}}}},
+ {"name":"financial_expenses_by_category","description":"Agrupa despesas contabilizadas por categoria no período. Considera somente transações negativas e contas do usuário autenticado. Datas opcionais no formato YYYY-MM-DD.","inputSchema":{"type":"object","properties":{"start_date":{"type":"string","description":"Data inicial inclusiva YYYY-MM-DD"},"end_date":{"type":"string","description":"Data final inclusiva YYYY-MM-DD"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":50}}}},
+ {"name":"investment_positions","description":"Lista posições consolidadas da carteira do usuário, com quantidade, custo investido e última cotação disponível quando houver. Somente leitura.","inputSchema":{"type":"object","properties":{}}},
+ {"name":"investment_income","description":"Consulta dividendos, juros sobre capital próprio e rendimentos registrados para o usuário, com filtro opcional por período e ticker.","inputSchema":{"type":"object","properties":{"start_date":{"type":"string","description":"Data inicial inclusiva YYYY-MM-DD"},"end_date":{"type":"string","description":"Data final inclusiva YYYY-MM-DD"},"ticker":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"portfolio_assets","description":"Lista somente ativos dentro do escopo. Exclui sempre opções, futuros, estruturas, instrumentos ambíguos e tickers terminados em 12 ou 13; não há parâmetro para reintroduzir itens excluídos.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"portfolio_transactions","description":"Consulta movimentações financeiras válidas do usuário autenticado. Exclui snapshots, valores zerados e instrumentos fora do escopo.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"source":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"portfolio_pending_reconciliation","description":"Lista pendências em formato estruturado, pronto para planilha. Cada linha inclui opções de decisão (manter, excluir, corrigir), campos de decisão ainda vazios e sugestão; não altera dados.","inputSchema":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
@@ -97,6 +103,67 @@ def call_tool(name,args,db,user):
  if name in WRITE_TOOL_NAMES and not settings.MCP_ENABLE_WRITES:
   return tool_error("Modo somente leitura: esta ferramenta de escrita está desabilitada neste ambiente.")
  limit=max(1,min(int(args.get("limit",100)),200))
+
+ if name in ("financial_cash_flow","financial_expenses_by_category","investment_income"):
+  def parse_bound(value, end=False):
+   if not value: return None
+   try:
+    parsed=datetime.fromisoformat(str(value))
+    return parsed.replace(hour=23,minute=59,second=59, microsecond=999999) if end and len(str(value))==10 else parsed
+   except (TypeError,ValueError):
+    raise ValueError("Data inválida. Use o formato YYYY-MM-DD.")
+  start=parse_bound(args.get("start_date"))
+  end=parse_bound(args.get("end_date"),True)
+  if start and end and start>end: return tool_error("Período inválido: start_date deve ser anterior ou igual a end_date.")
+  if name=="financial_cash_flow":
+   q=db.query(Transaction).join(Account,Transaction.account_id==Account.id).filter(Account.user_id==user.id,Transaction.is_accounted.is_(True))
+   if start: q=q.filter(Transaction.date>=start)
+   if end: q=q.filter(Transaction.date<=end)
+   monthly={}
+   for tx in q.order_by(Transaction.date.asc()).all():
+    key=tx.date.strftime("%Y-%m")
+    row=monthly.setdefault(key,{"month":key,"income":0.0,"expenses":0.0,"net":0.0,"transactions":0})
+    amount=float(tx.amount or 0)
+    if amount>0: row["income"]+=amount
+    elif amount<0: row["expenses"]+=abs(amount)
+    row["net"]+=amount; row["transactions"]+=1
+   return tool_result(sorted(monthly.values(),key=lambda x:x["month"]))
+  if name=="financial_expenses_by_category":
+   q=db.query(Transaction,Category.name).join(Account,Transaction.account_id==Account.id).outerjoin(Category,Transaction.category_id==Category.id).filter(Account.user_id==user.id,Transaction.is_accounted.is_(True),Transaction.amount<0)
+   if start: q=q.filter(Transaction.date>=start)
+   if end: q=q.filter(Transaction.date<=end)
+   groups={}
+   for tx,category_name in q.all():
+    key=category_name or "Sem categoria"
+    row=groups.setdefault(key,{"category":key,"total":0.0,"transactions":0})
+    row["total"]+=abs(float(tx.amount or 0));row["transactions"]+=1
+   return tool_result(sorted(groups.values(),key=lambda x:x["total"],reverse=True)[:limit])
+  q=db.query(InvestmentTransaction,Asset.ticker_current,Asset.name).join(Asset,InvestmentTransaction.asset_id==Asset.id).filter(InvestmentTransaction.user_id==user.id,InvestmentTransaction.operation_type.in_(["dividend","jcp","rendimento"]))
+  if args.get("ticker"): q=q.filter(Asset.ticker_current==args["ticker"].strip().upper())
+  if start: q=q.filter(InvestmentTransaction.trade_date>=start)
+  if end: q=q.filter(InvestmentTransaction.trade_date<=end)
+  rows=q.order_by(InvestmentTransaction.trade_date.desc(),InvestmentTransaction.id.desc()).limit(limit).all()
+  return tool_result([{"ticker":ticker,"asset_name":asset_name,"type":tx.operation_type,"amount":abs(float(tx.total_amount or 0)),"date":tx.trade_date,"source":tx.source,"notes":tx.notes} for tx,ticker,asset_name in rows])
+ if name=="financial_accounts":
+  rows=db.query(Account).filter(Account.user_id==user.id).order_by(Account.name.asc()).all()
+  return tool_result([{"id":a.id,"name":a.name,"type":a.type,"balance":float(a.balance or 0)} for a in rows])
+ if name=="investment_positions":
+  from app.api.endpoints.investments import get_portfolio
+  positions=get_portfolio(db,user)
+  quotes=db.query(AssetQuote).filter(AssetQuote.user_id==user.id).order_by(AssetQuote.quoted_at.desc()).all()
+  latest={}
+  for quote in quotes:
+   if quote.asset_id not in latest: latest[quote.asset_id]=quote
+  result=[]
+  for p in positions:
+   quote=latest.get(p.asset_id)
+   quantity=float(quote.quantity if quote and quote.quantity is not None else p.quantity)
+   price=float(quote.price) if quote else None
+   result.append({"ticker":p.ticker,"name":p.name,"asset_type":p.asset_type,"quantity":float(p.quantity),
+    "average_price":float(p.average_price),"cost_basis":float(p.total_invested),
+    "latest_price":price,"market_value":quantity*price if price is not None else None,
+    "quote_date":quote.quoted_at if quote else None,"total_dividends":float(p.total_dividends)})
+  return tool_result(result)
  if name=="portfolio_assets":
   q=db.query(Asset).order_by(Asset.ticker_current.asc())
   if args.get("ticker"):

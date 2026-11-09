@@ -81,7 +81,7 @@ def has_matching_bank_income(
     return db.query(InvestmentTransaction.id).filter(
         InvestmentTransaction.user_id == user_id,
         InvestmentTransaction.asset_id == asset_id,
-        InvestmentTransaction.trade_date == trade_date,
+        func.date(InvestmentTransaction.trade_date) == trade_date.date(),
         InvestmentTransaction.total_amount == amount,
         InvestmentTransaction.operation_type.in_(("dividend", "jcp", "rendimento")),
         InvestmentTransaction.source == "open_finance",

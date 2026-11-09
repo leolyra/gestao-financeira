@@ -376,6 +376,7 @@ async def _process_item(item_id: str, current_user_id: int, db: Session):
                         synced_invs += 1
     except Exception as e:
         print(f"[OPEN_FINANCE] Erro ao sincronizar investimentos do item {item_id}: {e}")
+        raise
 
     db.commit()
     return synced_accs, synced_txs, synced_invs, item_status
@@ -389,6 +390,7 @@ async def sync_all_existing_items(
     total_transactions = 0
     total_investments = 0
     items_processed = 0
+    item_errors = []
 
     item_ids = {row[0] for row in db.query(PluggyConnection.item_id).filter(PluggyConnection.user_id == current_user.id).all()}
 
@@ -421,6 +423,7 @@ async def sync_all_existing_items(
             items_processed += 1
         except Exception as e:
             db.rollback()
+            item_errors.append(str(item_id))
             print(f"[SYNC_ALL] Erro ao processar item {item_id}: {e}")
 
     # As contas vinculadas aos itens já foram processadas em _process_item.
@@ -429,8 +432,9 @@ async def sync_all_existing_items(
     db.commit()
 
     return {
-        "status": "success",
-        "items_count": items_processed or len(item_ids),
+        "status": "partial" if item_errors else "success",
+        "items_count": items_processed,
+        "items_failed": len(item_errors),
         "accounts_synced": total_accounts or len(existing_accounts),
         "transactions_synced": total_transactions,
         "investments_synced": total_investments
@@ -456,6 +460,7 @@ async def sync_investments_only(
 
     total_invs = 0
     items_done = 0
+    item_errors = []
     for item_id in item_ids:
         try:
             _, _, invs, _ = await _process_item(item_id, current_user.id, db)
@@ -463,12 +468,14 @@ async def sync_investments_only(
             items_done += 1
         except Exception as e:
             db.rollback()
+            item_errors.append(str(item_id))
             print(f"[SYNC_INVESTMENTS] Erro no item {item_id}: {e}")
 
     db.commit()
     return {
-        "status": "success",
+        "status": "partial" if item_errors else "success",
         "items_processed": items_done,
+        "items_failed": len(item_errors),
         "investments_and_proventos_synced": total_invs,
         "message": f"Sincronização de Investimentos concluída: {total_invs} posições, operações e proventos processados via Open Finance."
     }

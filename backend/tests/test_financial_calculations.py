@@ -76,3 +76,37 @@ class PluggyInvestmentIncomeClassificationTests(unittest.TestCase):
 
 
 if __name__ == "__main__": unittest.main()
+
+
+import httpx
+from app.services.pluggy_service import PluggyService
+
+
+class PluggyRateLimitTests(unittest.TestCase):
+    def setUp(self):
+        self.service = PluggyService()
+
+    def test_retry_after_seconds_is_respected(self):
+        response = httpx.Response(429, headers={"Retry-After": "7"})
+        self.assertEqual(self.service._retry_after_seconds(response), 7.0)
+
+    def test_missing_retry_after_returns_none(self):
+        response = httpx.Response(429)
+        self.assertIsNone(self.service._retry_after_seconds(response))
+
+
+class PluggyPaginationFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rate_limit_on_later_page_raises_instead_of_returning_partial_data(self):
+        service = PluggyService()
+        responses = [
+            httpx.Response(200, json={"results": [{"id": "tx-1"}], "pagination": {}}),
+            httpx.Response(429, text='{"code":429,"message":"Too many requests"}'),
+        ]
+
+        async def fake_request(method, path, params=None, json_data=None):
+            return responses.pop(0)
+
+        service._request = fake_request
+
+        with self.assertRaisesRegex(Exception, "resultados parciais não serão tratados como completos"):
+            await service._get_all_pages("/investments/example/transactions", {})

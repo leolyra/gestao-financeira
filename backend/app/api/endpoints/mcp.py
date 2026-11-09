@@ -54,7 +54,7 @@ def is_excluded(ticker, asset_type, name):
   return True
  if any(x in nm for x in STRUCTURED_TERMS):
   return True
- if typ == "ações" and (re.search(r"\b(FIM|FIC|FIRF|FIF|FICFIM)\b", nm) or re.fullmatch(r"\d{2}\.\d{3}\.\d{4}/\d{4}-\d{2}", t)):
+ if typ == "ações" and (re.search(r"\b(FIM|FIC|FIRF|FIF|FICFIM)\b", nm) or re.fullmatch(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", t)):
   return True
  if not t:
   return True

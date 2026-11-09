@@ -1,5 +1,5 @@
 """MCP Streamable HTTP endpoint using the existing Finance API JWT authentication.
-No arbitrary SQL is exposed. Mutations are typed, scoped, and require explicit approval.
+No arbitrary SQL is exposed. Mutations are disabled by default and must be explicitly enabled.
 """
 import json
 import logging
@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.entities import Asset, InvestmentTransaction, User, MCPAuditLog
 
@@ -23,13 +24,19 @@ ASSET_TYPE_OVERRIDES = {"TAEE11": "Ações", "COIN11": "Criptos", "HODL11": "Cri
 TICKER_ALIASES = {"JPMC3": "JPMC34"}
 ALLOWED_ASSET_TYPES = {"ações", "fundos imobiliários", "internacional", "renda fixa", "criptos", "etf", "bdr", "fundos de investimento", "tesouro direto"}
 
+WRITE_TOOL_NAMES = {"apply_asset_classification"}
+
 TOOLS = [
  {"name":"portfolio_assets","description":"Lista somente ativos dentro do escopo. Exclui sempre opções, futuros, estruturas, instrumentos ambíguos e tickers terminados em 12 ou 13; não há parâmetro para reintroduzir itens excluídos.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"portfolio_transactions","description":"Consulta movimentações financeiras válidas do usuário autenticado. Exclui snapshots, valores zerados e instrumentos fora do escopo.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"source":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"portfolio_pending_reconciliation","description":"Lista pendências em formato estruturado, pronto para planilha. Cada linha inclui opções de decisão (manter, excluir, corrigir), campos de decisão ainda vazios e sugestão; não altera dados.","inputSchema":{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":200,"default":100}}}},
  {"name":"propose_asset_classification","description":"Prepara uma alteração de classificação sem gravar. Solicite aprovação explícita do usuário.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)}},"required":["ticker","asset_type"]}},
- {"name":"apply_asset_classification","description":"Aplica a classificação somente com approved=true, após aprovação explícita do usuário na conversa.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)},"approved":{"type":"boolean"}},"required":["ticker","asset_type","approved"]}}
+ {"name":"apply_asset_classification","description":"Aplica a classificação somente quando a escrita estiver habilitada e approved=true após aprovação explícita do usuário.","inputSchema":{"type":"object","properties":{"ticker":{"type":"string"},"asset_type":{"type":"string","enum":sorted(ASSET_CLASSES)},"approved":{"type":"boolean"}},"required":["ticker","asset_type","approved"]}}
 ]
+
+def available_tools():
+    """Expose write-capable tools only when the deployment explicitly opts in."""
+    return [tool for tool in TOOLS if settings.MCP_ENABLE_WRITES or tool["name"] not in WRITE_TOOL_NAMES]
 
 def is_excluded(ticker, asset_type, name):
  t=(ticker or "").strip().upper()
@@ -87,6 +94,8 @@ def tool_error(message):
  return {"content":[{"type":"text","text":message}],"isError":True}
 
 def call_tool(name,args,db,user):
+ if name in WRITE_TOOL_NAMES and not settings.MCP_ENABLE_WRITES:
+  return tool_error("Modo somente leitura: esta ferramenta de escrita está desabilitada neste ambiente.")
  limit=max(1,min(int(args.get("limit",100)),200))
  if name=="portfolio_assets":
   q=db.query(Asset).order_by(Asset.ticker_current.asc())
@@ -159,7 +168,7 @@ async def mcp_endpoint(request:Request,db:Session=Depends(get_db),current_user:U
  if method=="initialize":
   return JSONResponse({"jsonrpc":"2.0","id":rid,"result":{"protocolVersion":PROTOCOL_VERSION,"capabilities":{"tools":{"listChanged":False}},"serverInfo":{"name":"gestao-financeira-mcp","version":"1.0.0"}}})
  if method=="ping": return JSONResponse({"jsonrpc":"2.0","id":rid,"result":{}})
- if method=="tools/list": return JSONResponse({"jsonrpc":"2.0","id":rid,"result":{"tools":TOOLS}})
+ if method=="tools/list": return JSONResponse({"jsonrpc":"2.0","id":rid,"result":{"tools":available_tools()}})
  if method=="tools/call":
   p=body.get("params") or {}
   try: result=call_tool(p.get("name",""),p.get("arguments") or {},db,current_user)
